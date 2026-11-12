@@ -8,7 +8,7 @@
     <parent>
         <groupId>com.github.kwart.jsign</groupId>
         <artifactId>jsignpdf-root</artifactId>
-        <version>2.3.0-SNAPSHOT</version>
+        <version>3.3.0-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -18,6 +18,25 @@
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>
+                        ${argLine}
+                        ${jsignpdf.jvm.access}
+                        -Dglass.platform=Monocle -Dmonocle.platform=Headless
+                        -Dprism.order=sw
+                    </argLine>
+                    <!-- Isolate tests from the developer's real config (~/.config/jsignpdf). Otherwise a
+                         persisted advanced.properties (e.g. engine=dss) leaks into tests that resolve the
+                         default engine and sign with it. -->
+                    <environmentVariables>
+                        <JSIGNPDF_CONFIG_DIR>${project.build.directory}/test-config</JSIGNPDF_CONFIG_DIR>
+                        <SOFTHSM2_CONF>${project.build.directory}/softhsm/softhsm2.conf</SOFTHSM2_CONF>
+                    </environmentVariables>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-dependency-plugin</artifactId>
@@ -35,46 +54,96 @@
                 </configuration>
             </plugin>
             <plugin>
-                <artifactId>maven-shade-plugin</artifactId>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.16</version>
                 <executions>
                     <execution>
-                        <phase>package</phase>
+                        <id>prepare-agent</id>
                         <goals>
-                            <goal>shade</goal>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
                         </goals>
                     </execution>
                 </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
                 <configuration>
-                    <createSourcesJar>true</createSourcesJar>
-                    <shadeSourcesContent>true</shadeSourcesContent>
-                    <createDependencyReducedPom>true</createDependencyReducedPom>
-                    <shadedArtifactAttached>true</shadedArtifactAttached>
-                    <shadedClassifierName>jar-with-dependencies</shadedClassifierName>
-                    <transformers>
-                        <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer" />
-                        <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                            <manifestEntries>
-                                <Main-Class>${exec.mainClass}</Main-Class>
-                            </manifestEntries>
-                        </transformer>
-                    </transformers>
+                    <archive>
+                        <manifest>
+                            <mainClass>${exec.mainClass}</mainClass>
+                        </manifest>
+                    </archive>
                 </configuration>
             </plugin>
         </plugins>
     </build>
 
     <dependencies>
+        <!-- Signing-engine SPI + shared model/core (compile). Engine implementations are discovered at
+             runtime via ServiceLoader; the default OpenPDF engine is bundled by the distribution module
+             and pulled in here at test scope so the in-module signing tests have an engine to run. -->
+        <dependency>
+            <groupId>com.github.kwart.jsign</groupId>
+            <artifactId>jsignpdf-engine-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.github.kwart.jsign</groupId>
+            <artifactId>jsignpdf-engine-openpdf</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.github.kwart.jsign</groupId>
+            <artifactId>jsignpdf-engine-dss</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- JavaFX -->
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-controls</artifactId>
+            <version>${openjfx.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-fxml</artifactId>
+            <version>${openjfx.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-swing</artifactId>
+            <version>${openjfx.version}</version>
+        </dependency>
+
+        <!--
+          Platform-classified JavaFX natives are NOT declared here. The library jar published
+          to Maven Central stays platform-neutral. The distribution module pulls the classifier
+          jars it needs to assemble the cross-platform full ZIP.
+        -->
+
         <dependency>
             <groupId>com.github.librepdf</groupId>
             <artifactId>openpdf</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.bouncycastle</groupId>
-            <artifactId>bcprov-jdk15on</artifactId>
+            <groupId>com.github.librepdf</groupId>
+            <artifactId>openpdf-renderer</artifactId>
         </dependency>
         <dependency>
             <groupId>org.bouncycastle</groupId>
-            <artifactId>bcpkix-jdk15on</artifactId>
+            <artifactId>bcprov-jdk18on</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-jdk18on</artifactId>
         </dependency>
         <dependency>
             <groupId>org.apache.commons</groupId>
@@ -89,12 +158,12 @@
             <artifactId>commons-io</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.github.rjolly</groupId>
-            <artifactId>pdf-renderer</artifactId>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
         </dependency>
         <dependency>
             <groupId>org.apache.pdfbox</groupId>
-            <artifactId>pdfbox</artifactId>
+            <artifactId>jbig2-imageio</artifactId>
         </dependency>
         <dependency>
             <groupId>com.github.kwart.jsign</groupId>
@@ -104,5 +173,69 @@
             <groupId>com.github.kwart.jsign</groupId>
             <artifactId>jsign-pkcs11</artifactId>
         </dependency>
+        <!-- D-Bus / XDG Desktop Portal (Linux sandbox file chooser) -->
+        <dependency>
+            <groupId>com.github.hypfvieh</groupId>
+            <artifactId>dbus-java-core</artifactId>
+            <version>${dbus-java.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.hypfvieh</groupId>
+            <artifactId>dbus-java-transport-native-unixsocket</artifactId>
+            <version>${dbus-java.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.testfx</groupId>
+            <artifactId>openjfx-monocle</artifactId>
+            <version>21.0.2</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
+
+    <profiles>
+        <!--
+          Manual screenshot refresh: renders the JavaFX UI off-screen through headless Monocle and
+          overwrites the guide/website images. Not part of any automated build.
+
+            mvn -pl jsignpdf -am -Pscreenshots test
+        -->
+        <profile>
+            <id>screenshots</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <includes>
+                                <include>**/FxScreenshotGenerator.java</include>
+                            </includes>
+                            <argLine>
+                                ${argLine}
+                                -Dglass.platform=Monocle -Dmonocle.platform=Headless
+                                -Dprism.order=sw
+                                <!-- The headless screen must be at least as large as the window, or
+                                     every pulse throws BufferOverflowException out of the painter. -->
+                                -Dheadless.geometry=1920x1200
+                            </argLine>
+                            <systemPropertyVariables>
+                                <jsignpdf.screenshot.outDir>${project.basedir}/../website/docs/img/javafx</jsignpdf.screenshot.outDir>
+                                <jsignpdf.screenshot.siteDir>${project.basedir}/../website/static/img/screenshots</jsignpdf.screenshot.siteDir>
+                                <jsignpdf.screenshot.demoDir>${project.basedir}/../distribution/demo</jsignpdf.screenshot.demoDir>
+                                <!-- A config dir alone is not enough: an empty one is seeded from the legacy
+                                     ~/.JSignPdf file, which would drag the developer's own settings and recent
+                                     files into the images. -->
+                                <user.home>${project.build.directory}/screenshot-home</user.home>
+                            </systemPropertyVariables>
+                            <environmentVariables>
+                                <JSIGNPDF_CONFIG_DIR>${project.build.directory}/screenshot-home/config</JSIGNPDF_CONFIG_DIR>
+                            </environmentVariables>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
 </project>

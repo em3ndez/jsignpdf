@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2026 Jiri Eischmann -->
+<component type="desktop-application">
+  <id>io.github.intoolswetrust.JSignPdf</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MPL-2.0 AND LGPL-2.1-only</project_license>
+  <name>JSignPdf</name>
+  <summary>Add digital signatures to PDF documents</summary>
+  <developer id="io.github.intoolswetrust">
+    <name>JSignPdf Project</name>
+  </developer>
+  <description>
+    <p>JSignPdf is a free, open source application that adds digital signatures to PDF documents. It supports visible and hidden signatures, certificate levels, timestamping, and batch processing from the command line.</p>
+    <p>Features:</p>
+    <ul>
+      <li>Visible and hidden digital signatures</li>
+      <li>Certificate levels and timestamping (TSA)</li>
+      <li>PDF encryption and rights management</li>
+      <li>Certificate revocation checks (CRL, OCSP)</li>
+      <li>Command-line batch processing</li>
+      <li>PKCS#11 hardware token support</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.intoolswetrust.JSignPdf.desktop</launchable>
+  <url type="homepage">https://jsignpdf.eu/</url>
+  <url type="bugtracker">https://github.com/intoolswetrust/jsignpdf/issues</url>
+  <url type="vcs-browser">https://github.com/intoolswetrust/jsignpdf</url>
+  <branding>
+    <color type="primary" scheme_preference="light">#faa298</color>
+    <color type="primary" scheme_preference="dark">#7f2c22</color>
+  </branding>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="3.2.1" date="2026-09-26">
+      <url type="details">https://github.com/intoolswetrust/jsignpdf/releases/tag/JSignPdf_3_2_1</url>
+      <description>
+        <p>Version 3.2.1</p>
+        <p>A bug-fix release for the JavaFX GUI, with two fixes contributed by the community. Thanks to Ladislav Nemec and Milos Jakubicek.</p>
+        <ul>
+          <li><em>Output suffix no longer piles up when switching presets</em> — loading a preset with a different output suffix used to append it to the previous one (<code>document_EM.pdf</code> became <code>document_EM_DL.pdf</code> instead of <code>document_DL.pdf</code>). A derived output name is now recomputed with the new suffix, a name you typed yourself is kept, and a new session no longer starts with the output file name left over from the last run. See pull request 505.</li>
+          <li><em>Proxy port is saved even without pressing Enter</em> — a port typed into the <em>TSA / Validation</em> settings was only committed on Enter, so the DSS engine could quietly connect to the proxy on port 80. The field now commits on focus loss too, and out-of-range values are rejected. See pull request 512.</li>
+          <li><em>Unconfirmed field edits are no longer lost</em> — signing or timestamping via a keyboard shortcut, closing the window, and saving or loading a preset now pick up the proxy port and font size fields as shown on screen. <em>File &gt; Exit</em> (<code>Ctrl+Q</code>) now saves the signing options, as closing the window already did.</li>
+          <li><em>Linux Flatpak bundle on the GitHub release</em> — it is now built from the same manifest as the Flathub one, so smartcard and YubiKey signing work there too.</li>
+          <li><em>Dependency updates</em> — BouncyCastle 1.86 and other routine library bumps.</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://jsignpdf.eu/img/screenshots/jsignpdf-javafx-main.png</image>
+      <caption>JSignPdf main window</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://jsignpdf.eu/img/screenshots/jsignpdf-javafx-signed.png</image>
+      <caption>JSignPdf - signing completed</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://jsignpdf.eu/img/screenshots/jsignpdf-javafx-visible-sig.png</image>
+      <caption>JSignPdf - placing visible signature</caption>
+    </screenshot>
+  </screenshots>
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+</component>

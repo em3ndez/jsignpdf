@@ -3,7 +3,7 @@
 
     <groupId>com.github.kwart.jsign</groupId>
     <artifactId>jsignpdf-root</artifactId>
-    <version>2.3.0-SNAPSHOT</version>
+    <version>3.3.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>${project.artifactId}</name>
@@ -12,29 +12,39 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <maven.compiler.source>1.8</maven.compiler.source>
-        <maven.compiler.target>${maven.compiler.source}</maven.compiler.target>
+        <maven.compiler.release>21</maven.compiler.release>
 
-        <maven.checkstyle.plugin.version>3.1.0</maven.checkstyle.plugin.version>
-        <maven.assembly.plugin.version>3.3.0</maven.assembly.plugin.version>
-        <maven.enforcer.plugin.version>3.1.0</maven.enforcer.plugin.version>
-        <maven.jar.plugin.version>3.2.2</maven.jar.plugin.version>
-        <maven.dependency.plugin.version>3.3.0</maven.dependency.plugin.version>
-        <maven.shade.plugin.version>3.3.0</maven.shade.plugin.version>
+        <maven.checkstyle.plugin.version>3.6.0</maven.checkstyle.plugin.version>
+        <maven.clean.plugin.version>3.5.0</maven.clean.plugin.version>
+        <maven.surefire.plugin.version>3.6.1</maven.surefire.plugin.version>
+        <maven.assembly.plugin.version>3.8.0</maven.assembly.plugin.version>
+        <maven.enforcer.plugin.version>3.7.0</maven.enforcer.plugin.version>
+        <maven.jar.plugin.version>3.5.1</maven.jar.plugin.version>
+        <maven.dependency.plugin.version>3.11.0</maven.dependency.plugin.version>
+        <maven.appassembler.plugin.version>2.1.0</maven.appassembler.plugin.version>
+        <build.helper.plugin.version>3.7.0</build.helper.plugin.version>
 
-        <bouncycastle.version>1.70</bouncycastle.version>
-        <jsign.pkcs11.version>1.1.0</jsign.pkcs11.version>
+        <bouncycastle.version>1.86</bouncycastle.version>
+        <jsign.pkcs11.version>1.2.0</jsign.pkcs11.version>
         <jsign.jpedal.version>4.92.13</jsign.jpedal.version>
-        <pdfbox.version>2.0.27</pdfbox.version>
-        <pdf-renderer.version>140</pdf-renderer.version>
-        <commons-io.version>2.11.0</commons-io.version>
-        <commons-cli.version>1.5.0</commons-cli.version>
-        <commons-lang3.version>3.12.0</commons-lang3.version>
-        <openpdf.version>1.3.30</openpdf.version>
+        <pdfbox.version>3.0.8</pdfbox.version>
+        <jbig2-imageio.version>3.0.5</jbig2-imageio.version>
+        <commons-io.version>2.22.0</commons-io.version>
+        <commons-cli.version>1.11.0</commons-cli.version>
+        <commons-lang3.version>3.21.0</commons-lang3.version>
+        <openpdf.version>3.0.5</openpdf.version>
+        <dss.version>6.5.1</dss.version>
         <junit.version>4.13.2</junit.version>
+        <openjfx.version>21.0.13</openjfx.version>
+        <dbus-java.version>5.2.2</dbus-java.version>
+
+        <!-- Keep in sync with distribution/jpackage/common-jvm-options.txt and the Flatpak launcher. -->
+        <jsignpdf.jvm.access>--add-exports=jdk.crypto.cryptoki/sun.security.pkcs11.wrapper=ALL-UNNAMED</jsignpdf.jvm.access>
     </properties>
 
     <modules>
+        <module>jsignpdf-bootstrap</module>
+        <module>engines</module>
         <module>jsignpdf</module>
         <module>installcert</module>
         <module>distribution</module>
@@ -43,18 +53,46 @@
     <dependencyManagement>
         <dependencies>
             <dependency>
+                <groupId>com.github.kwart.jsign</groupId>
+                <artifactId>jsignpdf-engine-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.github.kwart.jsign</groupId>
+                <artifactId>jsignpdf-engine-openpdf</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.github.kwart.jsign</groupId>
+                <artifactId>jsignpdf-engine-dss</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <!-- DSS BOM: manages all eu.europa.ec.joinup.sd-dss artifact versions used by the dss engine -->
+            <dependency>
+                <groupId>eu.europa.ec.joinup.sd-dss</groupId>
+                <artifactId>dss-bom</artifactId>
+                <version>${dss.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
                 <groupId>com.github.librepdf</groupId>
                 <artifactId>openpdf</artifactId>
                 <version>${openpdf.version}</version>
             </dependency>
             <dependency>
+                <groupId>com.github.librepdf</groupId>
+                <artifactId>openpdf-renderer</artifactId>
+                <version>${openpdf.version}</version>
+            </dependency>
+            <dependency>
                 <groupId>org.bouncycastle</groupId>
-                <artifactId>bcprov-jdk15on</artifactId>
+                <artifactId>bcprov-jdk18on</artifactId>
                 <version>${bouncycastle.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.bouncycastle</groupId>
-                <artifactId>bcpkix-jdk15on</artifactId>
+                <artifactId>bcpkix-jdk18on</artifactId>
                 <version>${bouncycastle.version}</version>
             </dependency>
             <dependency>
@@ -73,14 +111,14 @@
                 <version>${commons-io.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.github.rjolly</groupId>
-                <artifactId>pdf-renderer</artifactId>
-                <version>${pdf-renderer.version}</version>
-            </dependency>
-            <dependency>
                 <groupId>org.apache.pdfbox</groupId>
                 <artifactId>pdfbox</artifactId>
                 <version>${pdfbox.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.pdfbox</groupId>
+                <artifactId>jbig2-imageio</artifactId>
+                <version>${jbig2-imageio.version}</version>
             </dependency>
             <dependency>
                 <groupId>com.github.kwart.jsign</groupId>
@@ -107,8 +145,86 @@
     </dependencyManagement>
 
     <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-checkstyle-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>license-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>add-third-party</id>
+                        <goals>
+                            <goal>add-third-party</goal>
+                        </goals>
+                        <phase>generate-resources</phase>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}/META-INF</outputDirectory>
+                            <force>true</force>
+                            <includedLicenses>
+                                <!--
+                                  when available, use SPDX license identifiers listed in https://spdx.org/licenses
+                                -->
+                                <includedLicense>Apache-2.0</includedLicense>
+                                <includedLicense>Bouncy Castle Licence</includedLicense>
+                                <includedLicense>GPL-2.0-with-classpath-exception</includedLicense>
+                                <includedLicense>MIT</includedLicense>
+                                <includedLicense>LGPL-2.1</includedLicense>
+                                <!-- JSignPdf's own modules are dual MPL-2.0 / LGPL-2.1 -->
+                                <includedLicense>MPL-2.0</includedLicense>
+                                <!-- DSS transitive deps: EDL 1.0 / BSD (JAXB, Jakarta Activation, Stax2) -->
+                                <includedLicense>BSD-3-Clause</includedLicense>
+                            </includedLicenses>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
         <pluginManagement>
             <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-checkstyle-plugin</artifactId>
+                    <version>${maven.checkstyle.plugin.version}</version>
+                    <configuration>
+                        <configLocation>${maven.multiModuleProjectDirectory}/config/checkstyle.xml</configLocation>
+                        <includeTestSourceDirectory>true</includeTestSourceDirectory>
+                        <consoleOutput>true</consoleOutput>
+                        <failsOnError>true</failsOnError>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <id>checkstyle</id>
+                            <phase>validate</phase>
+                            <goals>
+                                <goal>check</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-clean-plugin</artifactId>
+                    <version>${maven.clean.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>${maven.surefire.plugin.version}</version>
+                    <configuration>
+                        <!-- Isolate tests from the developer's real config. ConfigLocationResolver
+                             honours JSIGNPDF_CONFIG_DIR verbatim and ahead of the platform location,
+                             so the AppConfig/PropertyStoreFactory singletons resolve a clean, build-local
+                             directory instead of ~/.config/jsignpdf (or %APPDATA%, ~/Library/...). Without
+                             this, tests that assert defaults (engine, advanced.properties) flake on a
+                             machine that has a saved config. The dir lives under target/ so `clean` wipes it. -->
+                        <environmentVariables>
+                            <JSIGNPDF_CONFIG_DIR>${project.build.directory}/test-config</JSIGNPDF_CONFIG_DIR>
+                        </environmentVariables>
+                    </configuration>
+                </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-jar-plugin</artifactId>
@@ -125,21 +241,58 @@
                     <version>${maven.enforcer.plugin.version}</version>
                 </plugin>
                 <plugin>
-                    <groupId>org.apache.maven.plugins</groupId>
-                    <artifactId>maven-shade-plugin</artifactId>
-                    <version>${maven.shade.plugin.version}</version>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>appassembler-maven-plugin</artifactId>
+                    <version>${maven.appassembler.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>build-helper-maven-plugin</artifactId>
+                    <version>${build.helper.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>license-maven-plugin</artifactId>
+                    <version>2.8.0</version>
                     <configuration>
-                        <filters>
-                            <filter>
-                                <artifact>*:*</artifact>
-                                <excludes>
-                                    <exclude>META-INF/*.SF</exclude>
-                                    <exclude>META-INF/*.DSA</exclude>
-                                    <exclude>META-INF/*.RSA</exclude>
-                                    <exclude>**/module-info.class</exclude>
-                                </excludes>
-                            </filter>
-                        </filters>
+                        <failOnBlacklist>true</failOnBlacklist>
+                        <failOnMissing>true</failOnMissing>
+                        <licenseMerges>
+                            <licenseMerge>
+                                GPL-2.0-with-classpath-exception |
+                                GPLv2+CE |
+                                GNU General Public License, version 2, with the Classpath Exception
+                            </licenseMerge>
+                            <licenseMerge>
+                                MIT |
+                                MIT License
+                            </licenseMerge>
+                            <licenseMerge>
+                                Apache-2.0 |
+                                Apache License 2.0 |
+                                Apache License, Version 2.0 |
+                                The Apache License, Version 2.0
+                            </licenseMerge>
+                            <licenseMerge>
+                                LGPL-2.1 |
+                                GNU Lesser General Public License (LGPL), Version 2.1 |
+                                Lesser General Public License (LGPL) |
+                                GNU Lesser General Public License, version 2.1 |
+                                GNU LESSER GENERAL PUBLIC LICENSE, Version 2.1 |
+                                GNU Lesser General Public License
+                            </licenseMerge>
+                            <licenseMerge>
+                                MPL-2.0 |
+                                Mozilla Public License Version 2.0
+                            </licenseMerge>
+                            <licenseMerge>
+                                BSD-3-Clause |
+                                EDL 1.0 |
+                                Eclipse Distribution License - v 1.0 |
+                                The BSD License
+                            </licenseMerge>
+                        </licenseMerges>
+                        <excludedScopes>test,provided</excludedScopes>
                     </configuration>
                 </plugin>
             </plugins>
@@ -167,8 +320,7 @@
     </developers>
 
     <scm>
-        <connection>scm:git:git://github.com/intoolswetrust/jsignpdf.git</connection>
-        <developerConnection>scm:git:git@github.com:intoolswetrust/jsignpdf.git</developerConnection>
+        <connection>scm:git:https://github.com/intoolswetrust/jsignpdf.git</connection>
         <url>http://github.com/intoolswetrust/jsignpdf/</url>
         <tag>HEAD</tag>
     </scm>
@@ -176,11 +328,11 @@
     <distributionManagement>
         <snapshotRepository>
             <id>ossrh</id>
-            <url>https://s01.oss.sonatype.org/content/repositories/snapshots/</url>
+            <url>https://central.sonatype.com/repository/maven-snapshots/</url>
         </snapshotRepository>
         <repository>
             <id>ossrh</id>
-            <url>https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/</url>
+            <url>https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/</url>
         </repository>
     </distributionManagement>
 
@@ -188,7 +340,7 @@
         <repository>
             <id>s01-snapshot-repository</id>
             <name>s01 Maven2 Snapshot Repository</name>
-            <url>https://s01.oss.sonatype.org/content/repositories/snapshots</url>
+            <url>https://central.sonatype.com/repository/maven-snapshots</url>
             <releases>
                 <enabled>false</enabled>
             </releases>
@@ -215,7 +367,7 @@
                                 <configuration>
                                     <rules>
                                         <requireJavaVersion>
-                                            <version>[1.8,1.9)</version>
+                                            <version>[21,22)</version>
                                         </requireJavaVersion>
                                     </rules>
                                 </configuration>
@@ -225,18 +377,18 @@
                     <plugin>
                         <groupId>org.sonatype.plugins</groupId>
                         <artifactId>nexus-staging-maven-plugin</artifactId>
-                        <version>1.6.8</version>
+                        <version>1.7.0</version>
                         <extensions>true</extensions>
                         <configuration>
                             <serverId>ossrh</serverId>
-                            <nexusUrl>https://s01.oss.sonatype.org/</nexusUrl>
+                            <nexusUrl>https://ossrh-staging-api.central.sonatype.com/</nexusUrl>
                             <autoReleaseAfterClose>true</autoReleaseAfterClose>
                         </configuration>
                     </plugin>
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-source-plugin</artifactId>
-                        <version>3.2.1</version>
+                        <version>3.4.0</version>
                         <executions>
                             <execution>
                                 <goals>
@@ -248,7 +400,7 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-javadoc-plugin</artifactId>
-                        <version>3.4.1</version>
+                        <version>3.12.0</version>
                         <executions>
                             <execution>
                                 <goals>
@@ -263,7 +415,7 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-gpg-plugin</artifactId>
-                        <version>3.0.1</version>
+                        <version>3.2.8</version>
                         <executions>
                             <execution>
                                 <phase>verify</phase>

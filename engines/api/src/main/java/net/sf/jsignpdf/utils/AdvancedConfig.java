@@ -1,0 +1,235 @@
+package net.sf.jsignpdf.utils;
+
+import static net.sf.jsignpdf.Constants.LOGGER;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Properties;
+import java.util.Set;
+
+import net.sf.jsignpdf.Constants;
+import net.sf.jsignpdf.utils.PropertyProvider.ProperyProviderException;
+
+import org.apache.commons.lang3.StringUtils;
+
+/**
+ * Two-layer configuration store backing {@code <cfg>/advanced.properties}: a mutable user layer that persists to disk and an
+ * immutable layer holding the defaults shipped inside the jar. Every getter consults the user layer first and falls back to
+ * the bundled defaults; mutators only touch the user layer. Replaces the legacy {@code ConfigProvider} singleton — tests
+ * construct it directly with a temp path and an in-memory defaults Properties.
+ */
+public final class AdvancedConfig {
+
+    private static final String PDF2IMAGE_LIBRARIES = "pdf2image.libraries";
+
+    private final PropertyProvider userLayer;
+    private final Properties bundledDefaults;
+    private final Properties overrides = new Properties();
+    private Properties baseline;
+
+    /**
+     * Creates an instance backed by {@code userFile} (may be {@code null} for an in-memory store) with the given bundled
+     * defaults. The user file is read immediately if it exists.
+     */
+    public AdvancedConfig(Path userFile, Properties bundledDefaults) {
+        this.userLayer = new PropertyProvider(userFile);
+        this.bundledDefaults = (Properties) Objects.requireNonNullElseGet(bundledDefaults, Properties::new).clone();
+        this.userLayer.load();
+        migrateUserLayer();
+        this.baseline = userLayerSnapshot();
+    }
+
+    /** Re-reads {@code userFile} from disk; the bundled-defaults layer is left untouched. */
+    public synchronized void reload() {
+        userLayer.clear();
+        Path path = userLayer.getPath();
+        if (path != null && Files.isRegularFile(path)) {
+            userLayer.load();
+        }
+        migrateUserLayer();
+        baseline = userLayerSnapshot();
+    }
+
+    /**
+     * Brings an older {@code advanced.properties} up to {@link Constants#CONFIG_VERSION} and stamps it, so a
+     * step that treats a stored value as a superseded default cannot revert the same value again once the
+     * user picks it deliberately. An empty config is skipped rather than stamped, so a fresh install still
+     * needs no file; {@link #save()} stamps it when it is first written.
+     */
+    private void migrateUserLayer() {
+        if (userLayer.stringPropertyNames().isEmpty()) {
+            return;
+        }
+        int from = storedConfigVersion();
+        if (from >= Constants.CONFIG_VERSION) {
+            return;
+        }
+        if (from < 1
+                && Constants.PDF2IMAGE_LIBRARIES_LEGACY_DEFAULT.equals(userLayer.getProperty(PDF2IMAGE_LIBRARIES))) {
+            userLayer.removeProperty(PDF2IMAGE_LIBRARIES);
+        }
+        stampConfigVersion();
+        Path path = userLayer.getPath();
+        if (path == null) {
+            return;
+        }
+        try {
+            userLayer.save();
+            LOGGER.fine("Migrated " + path + " from config version " + from + " to " + Constants.CONFIG_VERSION);
+        } catch (Exception e) {
+            // Leaves the file unstamped, so the next launch retries; this run uses the migrated values.
+            LOGGER.fine("Failed to persist migrated " + path + ": " + e.getMessage());
+        }
+    }
+
+    private int storedConfigVersion() {
+        return ConvertUtils.toInt(userLayer.getProperty(Constants.PROPERTY_CONFIG_VERSION), 0);
+    }
+
+    private void stampConfigVersion() {
+        userLayer.setProperty(Constants.PROPERTY_CONFIG_VERSION, String.valueOf(Constants.CONFIG_VERSION));
+    }
+
+    /** Drops every user override and deletes the backing file. Subsequent getters return bundled defaults. */
+    public synchronized void resetToDefaults() {
+        userLayer.clear();
+        Path path = userLayer.getPath();
+        if (path != null) {
+            try {
+                Files.deleteIfExists(path);
+            } catch (Exception e) {
+                LOGGER.fine("Failed to delete " + path + ": " + e.getMessage());
+            }
+        }
+        baseline = userLayerSnapshot();
+    }
+
+    /**
+     * Persists the current user layer to disk and returns the set of keys that changed since the last load/save. Returned set
+     * is never {@code null}.
+     */
+    public synchronized Set<String> save() throws ProperyProviderException {
+        if (userLayer.getPath() != null) {
+            stampConfigVersion();
+            userLayer.save();
+        }
+        Properties current = userLayerSnapshot();
+        Set<String> changed = diff(baseline, current);
+        baseline = current;
+        return changed;
+    }
+
+    public synchronized String getProperty(String key) {
+        String v = overrides.getProperty(key);
+        if (v != null) {
+            return v;
+        }
+        v = userLayer.getProperty(key);
+        return v != null ? v : bundledDefaults.getProperty(key);
+    }
+
+    /**
+     * Installs the given key/value pairs as the highest-priority, in-memory-only layer. Overrides win over the user file
+     * and the bundled defaults, and are never persisted by {@link #save()} nor reported as user overrides. Intended for
+     * transient CLI-supplied configuration. Entries with a {@code null} key or value are ignored.
+     */
+    public synchronized void applyOverrides(Map<String, String> kv) {
+        if (kv == null) {
+            return;
+        }
+        kv.forEach((k, v) -> {
+            if (k != null && v != null) {
+                overrides.setProperty(k, v);
+            }
+        });
+    }
+
+    public synchronized String getProperty(String key, String def) {
+        String v = getProperty(key);
+        return v != null ? v : def;
+    }
+
+    public synchronized String getNotEmptyProperty(String key, String def) {
+        String v = getProperty(key);
+        return StringUtils.isEmpty(v) ? def : v;
+    }
+
+    public synchronized boolean getAsBool(String key, boolean def) {
+        String v = getProperty(key);
+        return v == null ? def : ConvertUtils.toBoolean(v, def);
+    }
+
+    public synchronized int getAsInt(String key, int def) {
+        String v = getProperty(key);
+        return v == null ? def : ConvertUtils.toInt(v, def);
+    }
+
+    public synchronized float getAsFloat(String key, float def) {
+        String v = getProperty(key);
+        return v == null ? def : ConvertUtils.toFloat(v, def);
+    }
+
+    public synchronized void setProperty(String key, String value) {
+        if (value == null) {
+            userLayer.removeProperty(key);
+        } else {
+            userLayer.setProperty(key, value);
+        }
+    }
+
+    public synchronized void setProperty(String key, boolean value) {
+        userLayer.setProperty(key, value);
+    }
+
+    /** Reverts the given key to its bundled default by removing the user override. */
+    public synchronized void removeProperty(String key) {
+        userLayer.removeProperty(key);
+    }
+
+    /** True if the user layer (not the bundled defaults) holds an entry for the given key. */
+    public synchronized boolean hasUserOverride(String key) {
+        return userLayer.exists(key);
+    }
+
+    /** Live default value for the given key — the value the bundled jar resource ships. */
+    public String getBundledDefault(String key) {
+        return bundledDefaults.getProperty(key);
+    }
+
+    /** Path the user layer is bound to, or {@code null} for an in-memory provider. */
+    public Path getUserFile() {
+        return userLayer.getPath();
+    }
+
+    private Properties userLayerSnapshot() {
+        Properties snapshot = new Properties();
+        for (String key : userLayer.stringPropertyNames()) {
+            String v = userLayer.getProperty(key);
+            if (v != null) {
+                snapshot.setProperty(key, v);
+            }
+        }
+        return snapshot;
+    }
+
+    /**
+     * Keys that differ between the two snapshots. The {@link Constants#PROPERTY_CONFIG_VERSION} stamp is
+     * excluded because callers act on the change set to re-apply user-facing settings.
+     */
+    private static Set<String> diff(Properties a, Properties b) {
+        Set<String> changed = new HashSet<>();
+        Set<String> keys = new HashSet<>();
+        keys.addAll(a.stringPropertyNames());
+        keys.addAll(b.stringPropertyNames());
+        keys.remove(Constants.PROPERTY_CONFIG_VERSION);
+        for (String key : keys) {
+            if (!Objects.equals(a.getProperty(key), b.getProperty(key))) {
+                changed.add(key);
+            }
+        }
+        return changed;
+    }
+}

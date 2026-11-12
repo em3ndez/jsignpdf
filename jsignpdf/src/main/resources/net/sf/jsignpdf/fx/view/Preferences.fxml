@@ -1,0 +1,242 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+
+<TabPane xmlns="http://javafx.com/javafx"
+         xmlns:fx="http://javafx.com/fxml"
+         fx:controller="net.sf.jsignpdf.fx.preferences.PreferencesController"
+         fx:id="tabPane"
+         tabClosingPolicy="UNAVAILABLE"
+         prefWidth="720" prefHeight="520">
+
+    <!-- General: UI language + signing engine + diagnostics -->
+    <Tab fx:id="tabGeneral" text="%jfx.gui.preferences.section.general">
+        <VBox spacing="8">
+            <padding><Insets top="12" right="12" bottom="12" left="12"/></padding>
+            <HBox spacing="10" alignment="CENTER_LEFT">
+                <Label text="%jfx.gui.preferences.general.language"/>
+                <Label text="%jfx.gui.preferences.restartHint" styleClass="pref-restart-hint">
+                    <tooltip><Tooltip text="%jfx.gui.preferences.restartHint.tooltip"/></tooltip>
+                </Label>
+            </HBox>
+            <ChoiceBox fx:id="cmbUiLanguage" prefWidth="220"/>
+            <Label text="%jfx.gui.preferences.general.language.help" styleClass="pref-help" wrapText="true"/>
+            <Label text="%jfx.gui.engine.label"/>
+            <ChoiceBox fx:id="cmbEngine" prefWidth="220">
+                <tooltip><Tooltip text="%jfx.gui.engine.tooltip"/></tooltip>
+            </ChoiceBox>
+            <Label text="%jfx.gui.preferences.engine.help" styleClass="pref-help" wrapText="true"/>
+            <Label text="%jfx.gui.preferences.general.outputSuffix"/>
+            <TextField fx:id="txtOutputSuffix" prefWidth="220" maxWidth="220"/>
+            <Label text="%jfx.gui.preferences.general.outputSuffix.help" styleClass="pref-help" wrapText="true"/>
+            <Label text="%jfx.gui.preferences.general.outputSuffixTimestamp"/>
+            <TextField fx:id="txtOutputSuffixTimestamp" prefWidth="220" maxWidth="220"/>
+            <Label text="%jfx.gui.preferences.general.outputSuffixTimestamp.help" styleClass="pref-help" wrapText="true"/>
+            <CheckBox fx:id="chkDebug" text="%jfx.gui.preferences.general.debug"/>
+            <Label text="%jfx.gui.preferences.general.debug.help" styleClass="pref-help" wrapText="true"/>
+        </VBox>
+    </Tab>
+
+    <!-- Visible signature font -->
+    <Tab fx:id="tabFont" text="%jfx.gui.preferences.section.font">
+        <ScrollPane fitToWidth="true">
+            <VBox spacing="8">
+                <padding><Insets top="12" right="12" bottom="12" left="12"/></padding>
+
+                <Label text="%jfx.gui.preferences.font.path"/>
+                <HBox spacing="6">
+                    <TextField fx:id="txtFontPath" HBox.hgrow="ALWAYS"/>
+                    <Button fx:id="btnFontPathBrowse" text="%jfx.gui.preferences.font.path.browse"
+                            onAction="#onBrowseFontPath"/>
+                </HBox>
+                <Label text="%jfx.gui.preferences.font.path.help" styleClass="pref-help" wrapText="true"/>
+
+                <Label text="%jfx.gui.preferences.font.name"/>
+                <TextField fx:id="txtFontName"/>
+                <Label text="%jfx.gui.preferences.font.name.help" styleClass="pref-help" wrapText="true"/>
+
+                <Label text="%jfx.gui.preferences.font.encoding"/>
+                <ComboBox fx:id="cmbFontEncoding" editable="true" prefWidth="220"/>
+                <Label text="%jfx.gui.preferences.font.encoding.help" styleClass="pref-help" wrapText="true"/>
+            </VBox>
+        </ScrollPane>
+    </Tab>
+
+    <!-- Certificate validation -->
+    <Tab fx:id="tabCertificate" text="%jfx.gui.preferences.section.certificate">
+        <VBox spacing="8">
+            <padding><Insets top="12" right="12" bottom="12" left="12"/></padding>
+            <CheckBox fx:id="chkCertCheckValidity" text="%jfx.gui.preferences.cert.checkValidity"/>
+            <Label text="%jfx.gui.preferences.cert.checkValidity.help" styleClass="pref-help" wrapText="true"/>
+            <CheckBox fx:id="chkCertCheckKeyUsage" text="%jfx.gui.preferences.cert.checkKeyUsage"/>
+            <Label text="%jfx.gui.preferences.cert.checkKeyUsage.help" styleClass="pref-help" wrapText="true"/>
+            <CheckBox fx:id="chkCertCheckCriticalExtensions" text="%jfx.gui.preferences.cert.checkCriticalExtensions"/>
+            <Label text="%jfx.gui.preferences.cert.checkCriticalExtensions.help"
+                   styleClass="pref-help" wrapText="true"/>
+        </VBox>
+    </Tab>
+
+    <!-- Network / SSL -->
+    <Tab fx:id="tabNetwork" text="%jfx.gui.preferences.section.network">
+        <VBox spacing="8">
+            <padding><Insets top="12" right="12" bottom="12" left="12"/></padding>
+            <HBox spacing="10" alignment="CENTER_LEFT">
+                <CheckBox fx:id="chkRelaxSslSecurity" text="%jfx.gui.preferences.network.relaxSsl"/>
+                <Label text="%jfx.gui.preferences.restartHint" styleClass="pref-restart-hint">
+                    <tooltip><Tooltip text="%jfx.gui.preferences.restartHint.tooltip"/></tooltip>
+                </Label>
+            </HBox>
+            <Label text="%jfx.gui.preferences.network.relaxSsl.help" styleClass="pref-help" wrapText="true"/>
+        </VBox>
+    </Tab>
+
+    <!-- PDF render -->
+    <Tab fx:id="tabPdfRender" text="%jfx.gui.preferences.section.pdfRender">
+        <VBox spacing="8">
+            <padding><Insets top="12" right="12" bottom="12" left="12"/></padding>
+            <Label text="%jfx.gui.preferences.pdfRender.libraries"/>
+            <Label text="%jfx.gui.preferences.pdfRender.libraries.help" styleClass="pref-help" wrapText="true"/>
+            <VBox fx:id="vboxPdfLibs" spacing="4"/>
+        </VBox>
+    </Tab>
+
+    <!-- TSA -->
+    <Tab fx:id="tabTsa" text="%jfx.gui.preferences.section.tsa">
+        <VBox spacing="8">
+            <padding><Insets top="12" right="12" bottom="12" left="12"/></padding>
+            <Label text="%jfx.gui.preferences.tsa.hashAlgorithm"/>
+            <ComboBox fx:id="cmbTsaHashAlgorithm" prefWidth="220"/>
+            <Label text="%jfx.gui.preferences.tsa.hashAlgorithm.help" styleClass="pref-help" wrapText="true"/>
+        </VBox>
+    </Tab>
+
+    <!-- DSS engine (PAdES LT/LTA trust material) -->
+    <Tab fx:id="tabDss" text="%jfx.gui.dss.section.label">
+        <ScrollPane fitToWidth="true">
+            <VBox spacing="8">
+                <padding><Insets top="12" right="12" bottom="12" left="12"/></padding>
+                <CheckBox fx:id="chkDssOnlineEnabled" text="%jfx.gui.dss.online.enabled"/>
+                <Label text="%jfx.gui.dss.online.enabled.tooltip" styleClass="pref-help" wrapText="true"/>
+                <CheckBox fx:id="chkDssEuEnabled" text="%jfx.gui.dss.trust.eu.enabled"/>
+                <Label text="%jfx.gui.dss.trust.lotlUrls"/>
+                <TextField fx:id="txtDssLotlUrls"/>
+                <CheckBox fx:id="chkDssLotlMraSupport" text="%jfx.gui.dss.trust.lotlMraSupport"/>
+                <Label text="%jfx.gui.dss.trust.lotlMraSupport.tooltip" styleClass="pref-help" wrapText="true"/>
+                <Label text="%jfx.gui.dss.trust.certFiles"/>
+                <TextField fx:id="txtDssCertFiles"/>
+                <Label text="%jfx.gui.dss.trust.certUrls"/>
+                <TextField fx:id="txtDssCertUrls"/>
+                <Label text="%jfx.gui.dss.trust.truststoreFile"/>
+                <TextField fx:id="txtDssTruststoreFile"/>
+                <Label text="%jfx.gui.dss.trust.truststoreType"/>
+                <TextField fx:id="txtDssTruststoreType"/>
+                <Label text="%jfx.gui.dss.trust.truststorePassword"/>
+                <PasswordField fx:id="txtDssTruststorePassword"/>
+                <CheckBox fx:id="chkDssSystemStore" text="%jfx.gui.dss.trust.systemStore"/>
+                <Label text="%jfx.gui.dss.trust.systemStore.tooltip" styleClass="pref-help" wrapText="true"/>
+                <CheckBox fx:id="chkDssAllowUntrusted" text="%jfx.gui.dss.trust.allowUntrusted"/>
+                <Label text="%jfx.gui.dss.trust.allowUntrusted.tooltip" styleClass="pref-help" wrapText="true"/>
+            </VBox>
+        </ScrollPane>
+    </Tab>
+
+    <!-- PKCS#11 -->
+    <Tab fx:id="tabPkcs11" text="%jfx.gui.preferences.section.pkcs11">
+        <VBox spacing="8">
+            <padding><Insets top="12" right="12" bottom="12" left="12"/></padding>
+            <Label fx:id="lblPkcs11Flatpak" text="%jfx.gui.preferences.pkcs11.flatpak" styleClass="pref-help"
+                   wrapText="true"/>
+            <FlowPane hgap="4" vgap="4">
+                <Button fx:id="btnPkcs11Add" text="%jfx.gui.preferences.pkcs11.add" onAction="#onPkcs11Add"/>
+                <Button fx:id="btnPkcs11Duplicate" text="%jfx.gui.preferences.pkcs11.duplicate"
+                        onAction="#onPkcs11Duplicate"/>
+                <Button fx:id="btnPkcs11ChangeId" text="%jfx.gui.preferences.pkcs11.changeId"
+                        onAction="#onPkcs11ChangeId"/>
+                <Button fx:id="btnPkcs11Remove" text="%jfx.gui.preferences.pkcs11.remove"
+                        onAction="#onPkcs11Remove"/>
+                <Separator orientation="VERTICAL"/>
+                <Button fx:id="btnPkcs11Detect" text="%jfx.gui.preferences.pkcs11.detect"
+                        onAction="#onPkcs11Detect"/>
+                <Button fx:id="btnPkcs11Catalog" text="%jfx.gui.preferences.pkcs11.fromCatalog"
+                        onAction="#onPkcs11Catalog"/>
+            </FlowPane>
+            <SplitPane fx:id="splPkcs11" orientation="VERTICAL" dividerPositions="0.4" VBox.vgrow="ALWAYS">
+                <TableView fx:id="tblPkcs11Profiles" minHeight="80">
+                    <columns>
+                        <TableColumn fx:id="colPkcs11Label" text="%jfx.gui.preferences.pkcs11.col.label"
+                                     prefWidth="200" sortable="false"/>
+                        <TableColumn fx:id="colPkcs11Id" text="%jfx.gui.preferences.pkcs11.col.id"
+                                     prefWidth="120" sortable="false"/>
+                        <TableColumn fx:id="colPkcs11Library" text="%jfx.gui.preferences.pkcs11.col.library"
+                                     prefWidth="180" sortable="false"/>
+                        <TableColumn fx:id="colPkcs11Status" text="%jfx.gui.preferences.pkcs11.col.status"
+                                     prefWidth="100" sortable="false"/>
+                    </columns>
+                    <placeholder>
+                        <Label text="%jfx.gui.preferences.pkcs11.noSelection" styleClass="pref-help" wrapText="true"/>
+                    </placeholder>
+                </TableView>
+                <StackPane>
+                    <ScrollPane fx:id="scrPkcs11Editor" fitToWidth="true">
+                        <VBox fx:id="boxPkcs11Editor" spacing="6">
+                            <padding><Insets top="8" right="4" bottom="4" left="4"/></padding>
+                            <Label fx:id="lblPkcs11Path" styleClass="pref-path-label" wrapText="true"/>
+                            <Label fx:id="lblPkcs11Status" styleClass="pref-help" wrapText="true"/>
+                            <GridPane hgap="8" vgap="6">
+                                <columnConstraints>
+                                    <ColumnConstraints minWidth="80"/>
+                                    <ColumnConstraints hgrow="ALWAYS"/>
+                                </columnConstraints>
+                                <Label text="%jfx.gui.preferences.pkcs11.label"
+                                       GridPane.rowIndex="0" GridPane.columnIndex="0"/>
+                                <TextField fx:id="txtPkcs11Label" GridPane.rowIndex="0" GridPane.columnIndex="1"/>
+                                <Label text="%jfx.gui.preferences.pkcs11.library"
+                                       GridPane.rowIndex="1" GridPane.columnIndex="0"/>
+                                <HBox spacing="4" GridPane.rowIndex="1" GridPane.columnIndex="1">
+                                    <TextField fx:id="txtPkcs11Library" HBox.hgrow="ALWAYS"/>
+                                    <Button fx:id="btnPkcs11LibraryBrowse" text="…" onAction="#onPkcs11BrowseLibrary"/>
+                                </HBox>
+                            </GridPane>
+                            <Label fx:id="lblPkcs11LibraryMissing" styleClass="pref-restart-hint" wrapText="true"/>
+                            <Label fx:id="lblPkcs11CliHint" styleClass="pref-path-label" wrapText="true"/>
+                            <TitledPane fx:id="ttlPkcs11Advanced" text="%jfx.gui.preferences.pkcs11.advanced"
+                                        expanded="false" animated="false">
+                                <VBox spacing="6">
+                                    <GridPane hgap="8" vgap="6">
+                                        <columnConstraints>
+                                            <ColumnConstraints minWidth="80"/>
+                                            <ColumnConstraints hgrow="ALWAYS"/>
+                                        </columnConstraints>
+                                        <Label text="%jfx.gui.preferences.pkcs11.provider"
+                                               GridPane.rowIndex="0" GridPane.columnIndex="0"/>
+                                        <ChoiceBox fx:id="cmbPkcs11Provider"
+                                                   GridPane.rowIndex="0" GridPane.columnIndex="1"/>
+                                    </GridPane>
+                                    <Label text="%jfx.gui.preferences.pkcs11.provider.help" styleClass="pref-help"
+                                           wrapText="true"/>
+                                    <Label text="%jfx.gui.preferences.pkcs11.raw"/>
+                                    <TextArea fx:id="txtPkcs11Body" wrapText="false" prefRowCount="10"
+                                              prefColumnCount="60" styleClass="pref-monospace"/>
+                                    <Label text="%jfx.gui.preferences.pkcs11.help" styleClass="pref-help"
+                                           wrapText="true"/>
+                                    <Label fx:id="lblPkcs11EmptyHint" text="%jfx.gui.preferences.pkcs11.emptyHint"
+                                           styleClass="pref-help" wrapText="true"/>
+                                    <HBox spacing="6">
+                                        <Button fx:id="btnPkcs11ResetSample"
+                                                text="%jfx.gui.preferences.pkcs11.resetSample"
+                                                onAction="#onPkcs11ResetSample"/>
+                                    </HBox>
+                                </VBox>
+                            </TitledPane>
+                        </VBox>
+                    </ScrollPane>
+                    <Label fx:id="lblPkcs11NoSelection" text="%jfx.gui.preferences.pkcs11.noSelection"
+                           styleClass="pref-help" wrapText="true"/>
+                </StackPane>
+            </SplitPane>
+        </VBox>
+    </Tab>
+
+</TabPane>

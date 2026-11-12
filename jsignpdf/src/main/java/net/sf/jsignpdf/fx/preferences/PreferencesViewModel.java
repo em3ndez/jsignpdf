@@ -1,0 +1,362 @@
+package net.sf.jsignpdf.fx.preferences;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.function.Function;
+
+import javafx.beans.property.BooleanProperty;
+import javafx.beans.property.IntegerProperty;
+import javafx.beans.property.SimpleBooleanProperty;
+import javafx.beans.property.SimpleIntegerProperty;
+import javafx.beans.property.SimpleStringProperty;
+import javafx.beans.property.StringProperty;
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
+import net.sf.jsignpdf.Constants;
+import net.sf.jsignpdf.pkcs11.Pkcs11Profile;
+import net.sf.jsignpdf.pkcs11.Pkcs11Profiles;
+import net.sf.jsignpdf.pkcs11.ProfileStatus;
+import net.sf.jsignpdf.utils.AdvancedConfig;
+import net.sf.jsignpdf.utils.AppConfig;
+import net.sf.jsignpdf.utils.UiLocale;
+
+/**
+ * Backing model for the Preferences dialog. Loaded from {@link AdvancedConfig} on dialog open and written back on OK.
+ * Properties match the keys in {@code advanced.properties}; the PDF-library order is encoded as three pairs (checkbox + 1/2/3
+ * order index) so the UI can render an ordered list with up/down buttons.
+ */
+public class PreferencesViewModel {
+
+    public static final String LIB_JPEDAL = "jpedal";
+    public static final String LIB_PDFBOX = "pdfbox";
+    public static final String LIB_OPENPDF = "openpdf";
+
+    private final StringProperty uiLanguage = new SimpleStringProperty("");
+    private final StringProperty engineId = new SimpleStringProperty(AppConfig.DEFAULT_ENGINE_ID);
+    private final BooleanProperty debug = new SimpleBooleanProperty(false);
+    private final StringProperty outputSuffix = new SimpleStringProperty(Constants.DEFAULT_OUT_SUFFIX);
+    private final StringProperty outputSuffixTimestamp = new SimpleStringProperty(Constants.DEFAULT_TIMESTAMP_SUFFIX);
+
+    private final StringProperty fontPath = new SimpleStringProperty("");
+    private final StringProperty fontName = new SimpleStringProperty("");
+    private final StringProperty fontEncoding = new SimpleStringProperty("");
+
+    private final BooleanProperty checkValidity = new SimpleBooleanProperty(true);
+    private final BooleanProperty checkKeyUsage = new SimpleBooleanProperty(true);
+    private final BooleanProperty checkCriticalExtensions = new SimpleBooleanProperty(false);
+
+    private final BooleanProperty relaxSslSecurity = new SimpleBooleanProperty(false);
+
+    private final BooleanProperty pdfLibJpedal = new SimpleBooleanProperty(true);
+    private final BooleanProperty pdfLibPdfbox = new SimpleBooleanProperty(true);
+    private final BooleanProperty pdfLibOpenpdf = new SimpleBooleanProperty(true);
+    private final IntegerProperty pdfLibJpedalOrder = new SimpleIntegerProperty(1);
+    private final IntegerProperty pdfLibPdfboxOrder = new SimpleIntegerProperty(2);
+    private final IntegerProperty pdfLibOpenpdfOrder = new SimpleIntegerProperty(3);
+
+    private final StringProperty tsaHashAlgorithm = new SimpleStringProperty("SHA-256");
+
+    // DSS engine (engine.dss.*) — trust material for PAdES LT/LTA
+    private final BooleanProperty dssOnlineEnabled = new SimpleBooleanProperty(false);
+    private final BooleanProperty dssEuEnabled = new SimpleBooleanProperty(false);
+    private final StringProperty dssLotlUrls = new SimpleStringProperty("");
+    private final BooleanProperty dssLotlMraSupport = new SimpleBooleanProperty(false);
+    private final StringProperty dssCertFiles = new SimpleStringProperty("");
+    private final StringProperty dssCertUrls = new SimpleStringProperty("");
+    private final StringProperty dssTruststoreFile = new SimpleStringProperty("");
+    private final StringProperty dssTruststoreType = new SimpleStringProperty("");
+    private final StringProperty dssTruststorePassword = new SimpleStringProperty("");
+    private final BooleanProperty dssSystemStore = new SimpleBooleanProperty(false);
+    private final BooleanProperty dssAllowUntrusted = new SimpleBooleanProperty(false);
+
+    private final ObservableList<Pkcs11ProfileDraft> pkcs11Profiles = FXCollections.observableArrayList();
+
+    /** Loads the VM from the given snapshot of {@link AdvancedConfig}. */
+    public void loadFrom(AdvancedConfig cfg) {
+        // Canonicalised so a hand-edited zh_CN / de-AT shows up as the selector item it actually loads.
+        uiLanguage.set(UiLocale.canonicalTag(cfg.getProperty("ui.language")));
+        engineId.set(cfg.getNotEmptyProperty("engine", AppConfig.DEFAULT_ENGINE_ID));
+        debug.set(cfg.getAsBool("debug", false));
+        outputSuffix.set(cfg.getNotEmptyProperty("output.suffix", Constants.DEFAULT_OUT_SUFFIX));
+        outputSuffixTimestamp.set(cfg.getNotEmptyProperty("output.suffix.timestamp", Constants.DEFAULT_TIMESTAMP_SUFFIX));
+        fontPath.set(orEmpty(cfg.getProperty("font.path")));
+        fontName.set(orEmpty(cfg.getProperty("font.name")));
+        fontEncoding.set(orEmpty(cfg.getProperty("font.encoding")));
+
+        checkValidity.set(cfg.getAsBool("certificate.checkValidity", true));
+        checkKeyUsage.set(cfg.getAsBool("certificate.checkKeyUsage", true));
+        checkCriticalExtensions.set(cfg.getAsBool("certificate.checkCriticalExtensions", false));
+
+        relaxSslSecurity.set(cfg.getAsBool("relax.ssl.security", false));
+
+        decodePdfLibraries(cfg.getNotEmptyProperty("pdf2image.libraries", Constants.PDF2IMAGE_LIBRARIES_DEFAULT));
+
+        tsaHashAlgorithm.set(cfg.getNotEmptyProperty("tsa.hashAlgorithm", "SHA-256"));
+
+        dssOnlineEnabled.set(cfg.getAsBool("engine.dss.online.enabled", false));
+        dssEuEnabled.set(cfg.getAsBool("engine.dss.trust.eu.enabled", false));
+        dssLotlUrls.set(orEmpty(cfg.getProperty("engine.dss.trust.lotlUrls")));
+        dssLotlMraSupport.set(cfg.getAsBool("engine.dss.trust.lotlMraSupport", false));
+        dssCertFiles.set(orEmpty(cfg.getProperty("engine.dss.trust.certFiles")));
+        dssCertUrls.set(orEmpty(cfg.getProperty("engine.dss.trust.certUrls")));
+        dssTruststoreFile.set(orEmpty(cfg.getProperty("engine.dss.trust.truststoreFile")));
+        dssTruststoreType.set(orEmpty(cfg.getProperty("engine.dss.trust.truststoreType")));
+        dssTruststorePassword.set(orEmpty(cfg.getProperty("engine.dss.trust.truststorePassword")));
+        dssSystemStore.set(cfg.getAsBool("engine.dss.trust.systemStore", false));
+        dssAllowUntrusted.set(cfg.getAsBool("engine.dss.trust.allowUntrusted", false));
+    }
+
+    /** Loads the PKCS#11 profiles to edit. */
+    public void loadPkcs11Profiles(List<Pkcs11Profile> profiles, Function<String, ProfileStatus> statusLookup) {
+        pkcs11Profiles.clear();
+        for (Pkcs11Profile p : profiles) {
+            pkcs11Profiles.add(new Pkcs11ProfileDraft(p.id(), p.id(), p.body(), statusLookup.apply(p.id())));
+        }
+    }
+
+    /** The edited profiles as a full set, in list order. */
+    public List<Pkcs11Profiles.ProfileEdit> pkcs11Edits() {
+        List<Pkcs11Profiles.ProfileEdit> edits = new ArrayList<>();
+        for (Pkcs11ProfileDraft d : pkcs11Profiles) {
+            edits.add(d.toEdit());
+        }
+        return edits;
+    }
+
+    /** Writes the VM back into the given {@link AdvancedConfig} (does not persist; caller should call {@code save()}). */
+    public void writeTo(AdvancedConfig cfg) {
+        writeStringOrRemove(cfg, "ui.language", uiLanguage.get());
+        cfg.setProperty("engine", orFallback(engineId.get(), AppConfig.DEFAULT_ENGINE_ID));
+        cfg.setProperty("debug", debug.get());
+        writeStringOrRemove(cfg, "output.suffix", outputSuffix.get());
+        writeStringOrRemove(cfg, "output.suffix.timestamp", outputSuffixTimestamp.get());
+        writeStringOrRemove(cfg, "font.path", fontPath.get());
+        writeStringOrRemove(cfg, "font.name", fontName.get());
+        writeStringOrRemove(cfg, "font.encoding", fontEncoding.get());
+        cfg.setProperty("certificate.checkValidity", checkValidity.get());
+        cfg.setProperty("certificate.checkKeyUsage", checkKeyUsage.get());
+        cfg.setProperty("certificate.checkCriticalExtensions", checkCriticalExtensions.get());
+        cfg.setProperty("relax.ssl.security", relaxSslSecurity.get());
+        cfg.setProperty("pdf2image.libraries", encodePdfLibraries());
+        cfg.setProperty("tsa.hashAlgorithm", tsaHashAlgorithm.get());
+
+        cfg.setProperty("engine.dss.online.enabled", dssOnlineEnabled.get());
+        cfg.setProperty("engine.dss.trust.eu.enabled", dssEuEnabled.get());
+        writeStringOrRemove(cfg, "engine.dss.trust.lotlUrls", dssLotlUrls.get());
+        cfg.setProperty("engine.dss.trust.lotlMraSupport", dssLotlMraSupport.get());
+        writeStringOrRemove(cfg, "engine.dss.trust.certFiles", dssCertFiles.get());
+        writeStringOrRemove(cfg, "engine.dss.trust.certUrls", dssCertUrls.get());
+        writeStringOrRemove(cfg, "engine.dss.trust.truststoreFile", dssTruststoreFile.get());
+        writeStringOrRemove(cfg, "engine.dss.trust.truststoreType", dssTruststoreType.get());
+        writeStringOrRemove(cfg, "engine.dss.trust.truststorePassword", dssTruststorePassword.get());
+        cfg.setProperty("engine.dss.trust.systemStore", dssSystemStore.get());
+        cfg.setProperty("engine.dss.trust.allowUntrusted", dssAllowUntrusted.get());
+    }
+
+    /** Resets every VM property to the bundled-default value (read from the given snapshot of bundled defaults). */
+    public void applyDefaults(AdvancedConfig defaults) {
+        applyGeneralDefaults(defaults);
+        applyFontDefaults(defaults);
+        applyCertificateDefaults(defaults);
+        applyNetworkDefaults(defaults);
+        applyPdfRenderDefaults(defaults);
+        applyTsaDefaults(defaults);
+        applyDssDefaults(defaults);
+    }
+
+    public void applyGeneralDefaults(AdvancedConfig defaults) {
+        uiLanguage.set(orEmpty(defaults.getBundledDefault("ui.language")));
+        engineId.set(orFallback(defaults.getBundledDefault("engine"), AppConfig.DEFAULT_ENGINE_ID));
+        debug.set(parseBool(defaults.getBundledDefault("debug"), false));
+        outputSuffix.set(orFallback(defaults.getBundledDefault("output.suffix"), Constants.DEFAULT_OUT_SUFFIX));
+        outputSuffixTimestamp.set(orFallback(defaults.getBundledDefault("output.suffix.timestamp"), Constants.DEFAULT_TIMESTAMP_SUFFIX));
+    }
+
+    public void applyFontDefaults(AdvancedConfig defaults) {
+        fontPath.set(orEmpty(defaults.getBundledDefault("font.path")));
+        fontName.set(orEmpty(defaults.getBundledDefault("font.name")));
+        fontEncoding.set(orEmpty(defaults.getBundledDefault("font.encoding")));
+    }
+
+    public void applyCertificateDefaults(AdvancedConfig defaults) {
+        checkValidity.set(parseBool(defaults.getBundledDefault("certificate.checkValidity"), true));
+        checkKeyUsage.set(parseBool(defaults.getBundledDefault("certificate.checkKeyUsage"), true));
+        checkCriticalExtensions.set(parseBool(defaults.getBundledDefault("certificate.checkCriticalExtensions"), false));
+    }
+
+    public void applyNetworkDefaults(AdvancedConfig defaults) {
+        relaxSslSecurity.set(parseBool(defaults.getBundledDefault("relax.ssl.security"), false));
+    }
+
+    public void applyPdfRenderDefaults(AdvancedConfig defaults) {
+        decodePdfLibraries(orFallback(defaults.getBundledDefault("pdf2image.libraries"), Constants.PDF2IMAGE_LIBRARIES_DEFAULT));
+    }
+
+    public void applyTsaDefaults(AdvancedConfig defaults) {
+        tsaHashAlgorithm.set(orFallback(defaults.getBundledDefault("tsa.hashAlgorithm"), "SHA-256"));
+    }
+
+    public void applyDssDefaults(AdvancedConfig defaults) {
+        dssOnlineEnabled.set(parseBool(defaults.getBundledDefault("engine.dss.online.enabled"), false));
+        dssEuEnabled.set(parseBool(defaults.getBundledDefault("engine.dss.trust.eu.enabled"), false));
+        dssLotlUrls.set(orEmpty(defaults.getBundledDefault("engine.dss.trust.lotlUrls")));
+        dssLotlMraSupport.set(parseBool(defaults.getBundledDefault("engine.dss.trust.lotlMraSupport"), false));
+        dssCertFiles.set(orEmpty(defaults.getBundledDefault("engine.dss.trust.certFiles")));
+        dssCertUrls.set(orEmpty(defaults.getBundledDefault("engine.dss.trust.certUrls")));
+        dssTruststoreFile.set(orEmpty(defaults.getBundledDefault("engine.dss.trust.truststoreFile")));
+        dssTruststoreType.set(orEmpty(defaults.getBundledDefault("engine.dss.trust.truststoreType")));
+        dssTruststorePassword.set(orEmpty(defaults.getBundledDefault("engine.dss.trust.truststorePassword")));
+        dssSystemStore.set(parseBool(defaults.getBundledDefault("engine.dss.trust.systemStore"), false));
+        dssAllowUntrusted.set(parseBool(defaults.getBundledDefault("engine.dss.trust.allowUntrusted"), false));
+    }
+
+    public String encodePdfLibraries() {
+        // Build (libname, order, enabled) tuples and emit the enabled ones in ascending order.
+        record Lib(String name, int order, boolean enabled) {}
+        List<Lib> libs = new ArrayList<>();
+        libs.add(new Lib(LIB_JPEDAL, pdfLibJpedalOrder.get(), pdfLibJpedal.get()));
+        libs.add(new Lib(LIB_PDFBOX, pdfLibPdfboxOrder.get(), pdfLibPdfbox.get()));
+        libs.add(new Lib(LIB_OPENPDF, pdfLibOpenpdfOrder.get(), pdfLibOpenpdf.get()));
+        libs.sort((a, b) -> Integer.compare(a.order, b.order));
+        StringBuilder sb = new StringBuilder();
+        for (Lib lib : libs) {
+            if (lib.enabled) {
+                if (sb.length() > 0) sb.append(',');
+                sb.append(lib.name);
+            }
+        }
+        return sb.toString();
+    }
+
+    void decodePdfLibraries(String csv) {
+        Set<String> known = new LinkedHashSet<>(Arrays.asList(LIB_JPEDAL, LIB_PDFBOX, LIB_OPENPDF));
+        Set<String> seen = new LinkedHashSet<>();
+        if (csv != null) {
+            for (String token : csv.split("\\s*,\\s*")) {
+                if (known.contains(token)) {
+                    seen.add(token);
+                }
+            }
+        }
+        // Append any known libs missing from the input at the end (disabled).
+        Set<String> remaining = new LinkedHashSet<>(known);
+        remaining.removeAll(seen);
+
+        int order = 1;
+        for (String lib : seen) {
+            assignOrder(lib, order++);
+            assignEnabled(lib, true);
+        }
+        for (String lib : remaining) {
+            assignOrder(lib, order++);
+            assignEnabled(lib, false);
+        }
+    }
+
+    private void assignOrder(String lib, int order) {
+        switch (lib) {
+            case LIB_JPEDAL -> pdfLibJpedalOrder.set(order);
+            case LIB_PDFBOX -> pdfLibPdfboxOrder.set(order);
+            case LIB_OPENPDF -> pdfLibOpenpdfOrder.set(order);
+        }
+    }
+
+    private void assignEnabled(String lib, boolean enabled) {
+        switch (lib) {
+            case LIB_JPEDAL -> pdfLibJpedal.set(enabled);
+            case LIB_PDFBOX -> pdfLibPdfbox.set(enabled);
+            case LIB_OPENPDF -> pdfLibOpenpdf.set(enabled);
+        }
+    }
+
+    private static String orEmpty(String s) {
+        return s == null ? "" : s;
+    }
+
+    private static String orFallback(String s, String fallback) {
+        return (s == null || s.isEmpty()) ? fallback : s;
+    }
+
+    private static boolean parseBool(String s, boolean def) {
+        if (s == null) return def;
+        String t = s.trim().toLowerCase();
+        return t.equals("true") || t.equals("yes") || t.equals("1") || t.equals("on");
+    }
+
+    private static void writeStringOrRemove(AdvancedConfig cfg, String key, String value) {
+        if (value == null || value.isEmpty()) {
+            cfg.removeProperty(key);
+        } else {
+            cfg.setProperty(key, value);
+        }
+    }
+
+    public StringProperty uiLanguageProperty() { return uiLanguage; }
+    public StringProperty engineIdProperty() { return engineId; }
+    public BooleanProperty debugProperty() { return debug; }
+    public StringProperty outputSuffixProperty() { return outputSuffix; }
+    public StringProperty outputSuffixTimestampProperty() { return outputSuffixTimestamp; }
+    public StringProperty fontPathProperty() { return fontPath; }
+    public StringProperty fontNameProperty() { return fontName; }
+    public StringProperty fontEncodingProperty() { return fontEncoding; }
+    public BooleanProperty checkValidityProperty() { return checkValidity; }
+    public BooleanProperty checkKeyUsageProperty() { return checkKeyUsage; }
+    public BooleanProperty checkCriticalExtensionsProperty() { return checkCriticalExtensions; }
+    public BooleanProperty relaxSslSecurityProperty() { return relaxSslSecurity; }
+    public BooleanProperty pdfLibJpedalProperty() { return pdfLibJpedal; }
+    public BooleanProperty pdfLibPdfboxProperty() { return pdfLibPdfbox; }
+    public BooleanProperty pdfLibOpenpdfProperty() { return pdfLibOpenpdf; }
+    public IntegerProperty pdfLibJpedalOrderProperty() { return pdfLibJpedalOrder; }
+    public IntegerProperty pdfLibPdfboxOrderProperty() { return pdfLibPdfboxOrder; }
+    public IntegerProperty pdfLibOpenpdfOrderProperty() { return pdfLibOpenpdfOrder; }
+    public StringProperty tsaHashAlgorithmProperty() { return tsaHashAlgorithm; }
+    public BooleanProperty dssOnlineEnabledProperty() { return dssOnlineEnabled; }
+    public BooleanProperty dssEuEnabledProperty() { return dssEuEnabled; }
+    public StringProperty dssLotlUrlsProperty() { return dssLotlUrls; }
+    public BooleanProperty dssLotlMraSupportProperty() { return dssLotlMraSupport; }
+    public StringProperty dssCertFilesProperty() { return dssCertFiles; }
+    public StringProperty dssCertUrlsProperty() { return dssCertUrls; }
+    public StringProperty dssTruststoreFileProperty() { return dssTruststoreFile; }
+    public StringProperty dssTruststoreTypeProperty() { return dssTruststoreType; }
+    public StringProperty dssTruststorePasswordProperty() { return dssTruststorePassword; }
+    public BooleanProperty dssSystemStoreProperty() { return dssSystemStore; }
+    public BooleanProperty dssAllowUntrustedProperty() { return dssAllowUntrusted; }
+    public ObservableList<Pkcs11ProfileDraft> pkcs11Profiles() { return pkcs11Profiles; }
+
+    /** Move the given library one slot up (order--), swapping with the lib currently at that order. */
+    public void moveUp(String lib) {
+        int curr = orderOf(lib);
+        if (curr <= 1) return;
+        String other = libAtOrder(curr - 1);
+        assignOrder(other, curr);
+        assignOrder(lib, curr - 1);
+    }
+
+    /** Move the given library one slot down (order++), swapping with the lib currently at that order. */
+    public void moveDown(String lib) {
+        int curr = orderOf(lib);
+        if (curr >= 3) return;
+        String other = libAtOrder(curr + 1);
+        assignOrder(other, curr);
+        assignOrder(lib, curr + 1);
+    }
+
+    public int orderOf(String lib) {
+        return switch (lib) {
+            case LIB_JPEDAL -> pdfLibJpedalOrder.get();
+            case LIB_PDFBOX -> pdfLibPdfboxOrder.get();
+            case LIB_OPENPDF -> pdfLibOpenpdfOrder.get();
+            default -> -1;
+        };
+    }
+
+    private String libAtOrder(int order) {
+        if (pdfLibJpedalOrder.get() == order) return LIB_JPEDAL;
+        if (pdfLibPdfboxOrder.get() == order) return LIB_PDFBOX;
+        if (pdfLibOpenpdfOrder.get() == order) return LIB_OPENPDF;
+        return null;
+    }
+}

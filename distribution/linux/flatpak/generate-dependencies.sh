@@ -1,0 +1,177 @@
+#!/bin/bash
+# Generates maven-dependencies.json for Flatpak offline builds.
+
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Must match runtime-version in io.github.intoolswetrust.JSignPdf.Devel.yaml
+SDK_REF="${FLATPAK_SDK_REF:-org.freedesktop.Sdk//25.08}"
+SDK_EXT="${FLATPAK_SDK_EXT:-openjdk21}"
+
+REPO_URL="${REPO_URL:-https://github.com/intoolswetrust/jsignpdf.git}"
+BRANCH="${BRANCH:-master}"
+
+# Verify flatpak is installed
+if ! command -v flatpak >/dev/null 2>&1; then
+  echo "Error: flatpak command not found." >&2
+  exit 1
+fi
+
+# Verify SDK is installed. When it is installed both user- and
+# system-wide, flatpak refuses to guess which one to run, so pin it.
+if flatpak info --user "$SDK_REF" &>/dev/null; then
+  INSTALLATION="--user"
+elif flatpak info --system "$SDK_REF" &>/dev/null; then
+  INSTALLATION="--system"
+else
+  echo "Error: ${SDK_REF} is not installed" >&2
+  echo "  flatpak install flathub ${SDK_REF}" >&2
+  exit 1
+fi
+
+# Verify OpenJDK extension is installed
+EXT_REF="org.freedesktop.Sdk.Extension.${SDK_EXT}//${SDK_REF##*/}"
+if ! flatpak info "$INSTALLATION" "$EXT_REF" &>/dev/null; then
+  echo "Error: extension ${EXT_REF} is not installed ${INSTALLATION#--}-wide" >&2
+  echo "  flatpak install ${INSTALLATION} flathub ${EXT_REF}" >&2
+  exit 1
+fi
+
+echo "==> Generating dependencies in Flatpak SDK (${SDK_REF} + ${SDK_EXT})"
+
+# Run the dependency generation inside the Flatpak SDK
+# All the work is done in a single command pipeline
+cat << SCRIPT_EOF | env FLATPAK_ENABLE_SDK_EXT="${SDK_EXT}" SCRIPT_DIR="${SCRIPT_DIR}" flatpak run \
+  "${INSTALLATION}" \
+  --share=network \
+  --filesystem="${SCRIPT_DIR}:rw" \
+  --env=SCRIPT_DIR="${SCRIPT_DIR}" \
+  --devel \
+  "$SDK_REF"
+
+set -euo pipefail
+
+# Enable OpenJDK
+source /usr/lib/sdk/openjdk21/enable.sh
+
+# Set up directories (use the mounted SCRIPT_DIR)
+WORK_DIR="${SCRIPT_DIR}"
+BUILD_DIR="\${WORK_DIR}/jsignpdf-build"
+M2_DIR="\${WORK_DIR}/m2deps-flatpak"
+OUT_JSON="\${WORK_DIR}/maven-dependencies.json"
+
+echo "==> Cloning jsignpdf repository"
+rm -rf "\$BUILD_DIR"
+git clone --depth 1 --branch "${BRANCH}" "${REPO_URL}" "\$BUILD_DIR"
+
+echo "==> Running Maven to download dependencies"
+cd "\$BUILD_DIR"
+rm -rf "\$M2_DIR"
+mkdir -p "\$M2_DIR"
+mvn --batch-mode clean install \
+  -Dmaven.repo.local="\$M2_DIR" \
+  -DskipTests \
+  -Dmaven.javadoc.skip=true \
+  -Dmaven.source.skip=true \
+  -Dasciidoctor.skip=true
+
+# Maven resolves some artifacts against the *build host* arch, so a list
+# generated on x86_64 makes the offline build fail on Flathub's aarch64
+# builder (and vice versa). Pull the aarch64 counterparts explicitly.
+# The two mechanisms need different handling:
+#   * JavaFX picks its natives from the javafx.platform property.
+#   * brotli4j (via OpenPDF) encodes the arch in the artifactId and
+#     activates it with <os><arch> in its own POM, which no property can
+#     override -- so the artifact has to be fetched by coordinates.
+echo "==> Adding the aarch64 artifacts"
+mvn --batch-mode dependency:resolve \
+  -Dmaven.repo.local="\$M2_DIR" \
+  -DskipTests \
+  -Djavafx.platform=linux-aarch64
+
+find "\$M2_DIR" -type d -path "*/native-linux-x86_64/*" | while read -r dir; do
+  version=\$(basename "\$dir")
+  group=\$(dirname "\$(dirname "\$dir")")
+  group=\${group#\$M2_DIR/}
+  group=\${group//\//.}
+  echo "  fetching \${group}:native-linux-aarch64:\${version}"
+  mvn --batch-mode dependency:get \
+    -Dmaven.repo.local="\$M2_DIR" \
+    -Dartifact="\${group}:native-linux-aarch64:\${version}"
+done
+
+# The offline build breaks in ways that only surface on the aarch64
+# builder, so fail here rather than downstream at Flathub.
+missing=0
+for artifact in javafx-base javafx-controls javafx-fxml javafx-graphics javafx-swing; do
+  find "\$M2_DIR" -name "\${artifact}-*-linux-aarch64.jar" | grep -q . \
+    || { echo "Error: no linux-aarch64 jar for \${artifact}" >&2; missing=1; }
+done
+find "\$M2_DIR" -path "*native-linux-x86_64*" -name "*.jar" | grep -q . && {
+  find "\$M2_DIR" -path "*native-linux-aarch64*" -name "*.jar" | grep -q . \
+    || { echo "Error: host-arch native jar has no aarch64 counterpart" >&2; missing=1; }
+}
+[ "\$missing" -eq 0 ] || exit 1
+
+echo "==> Generating maven-dependencies.json"
+cd "\$WORK_DIR"
+
+# Create temp file for JSON entries
+TEMP_JSON="/tmp/maven-deps-\$\$.json"
+
+# Find all .jar, .pom, .aar files and generate JSON entries
+find "\$M2_DIR" -type f \( -name "*.jar" -o -name "*.pom" -o -name "*.aar" \) | sort | while read -r file; do
+  filename=\$(basename "\$file")
+  dir=\$(dirname "\$file")
+
+  # Only include artifacts that came from Maven Central.
+  # _remote.repositories records the source repo per file:
+  #   "filename>central="           → downloaded from Maven Central  ✓ keep
+  #   "filename>="                  → locally installed by mvn install  ✗ skip
+  #   "filename>s01-...="           → downloaded from the snapshot repo  ✗ skip
+  # Using a whitelist avoids both locally-built modules and project snapshot
+  # artifacts (sources JARs etc.) that Maven fetches from the snapshot repo
+  # but whose Maven Central URL would 404 in flatpak-builder.
+  if [[ ! -f "\$dir/_remote.repositories" ]] || \
+     ! grep -qE "^\${filename}>central=" "\$dir/_remote.repositories"; then
+    continue
+  fi
+
+  # Get relative path from M2_DIR
+  rel_path="\${file#\$M2_DIR/}"
+
+  # Convert path to Maven Central URL
+  url="https://repo1.maven.org/maven2/\${rel_path}"
+
+  # Compute SHA256
+  sha256=\$(sha256sum "\$file" | awk '{print \$1}')
+
+  # Get destination directory (parent directory in m2local)
+  dest_dir="m2local/\$(dirname "\$rel_path")"
+
+  # Write compact JSON entry on single line for easier comma handling
+  echo "{\"type\":\"file\",\"url\":\"\$url\",\"sha256\":\"\$sha256\",\"dest\":\"\$dest_dir\",\"dest-filename\":\"\$filename\"}"
+done > "\$TEMP_JSON"
+
+# Assemble final JSON with proper formatting and comma separators
+echo "[" > "\$OUT_JSON"
+# Add commas between entries and format with jq if available, else use sed
+if command -v jq >/dev/null 2>&1; then
+  jq -s '.' "\$TEMP_JSON" | tail -n +2 | head -n -1 >> "\$OUT_JSON"
+else
+  sed '1s/^/  /; 1!s/^/,  /' "\$TEMP_JSON" >> "\$OUT_JSON"
+fi
+echo "]" >> "\$OUT_JSON"
+
+# Clean up temp file
+rm -f "\$TEMP_JSON"
+
+echo "==> Generated \$(grep -c '"type": "file"' "\$OUT_JSON" || echo 0) dependency entries"
+
+echo "==> Cleaning up"
+rm -rf "\$BUILD_DIR" "\$M2_DIR"
+
+SCRIPT_EOF
+
+echo ""
+echo "Done. Use maven-dependencies.json in your Flatpak manifest."

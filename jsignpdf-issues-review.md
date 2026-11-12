@@ -1,0 +1,171 @@
+# JSignPdf — Open Issues Review and Action Plan
+
+**Date:** 2026-04-19 (revised 2026-08-08, 2026-08-09, 2026-09-06)
+**Scope:** open issues at https://github.com/intoolswetrust/jsignpdf/issues
+
+---
+
+## Review team
+
+| Expert | Domain |
+|---|---|
+| UX / usability | GUI layout, CLI ergonomics, error messages, i18n, accessibility, visible-signature rendering, install friction |
+| Java / JVM | Java 21 compatibility, JCA/PKCS#11, BouncyCastle, threading, performance, packaging (jpackage, Flatpak), Swing vs JavaFX |
+| PDF digital signatures | PAdES (B-B / B-T / B-LT / B-LTA), PKCS#7/CMS, RFC 3161 timestamping, OCSP/CRL, LTV, DSS/VRI, signature algorithms, eIDAS |
+| Documentation | User manual (`website/docs/JSignPdf.adoc`), CLI `--help`, website, troubleshooting / FAQ, i18n strings, release notes |
+
+All experts reviewed the open issues against the code on disk, flagged duplicates, and gave a priority from their domain perspective (19 issues open as of the 2026-09-06 revision; #491 and #492 added then). This document consolidates their verdicts — where the experts disagreed, the most informed domain wins (e.g. "is feature X in the code?" is decided by the Java or PDF-sig expert, not by UX).
+
+---
+
+## Priority legend
+
+| Code | Meaning |
+|---|---|
+| **P0** | Correctness / compliance bug, or will break on a supported JVM — fix next release |
+| **P1** | Significant friction or compliance gap — fix in this or the following milestone |
+| **P2** | Valued improvement — schedule opportunistically |
+| **P3** | Nice-to-have or cosmetic — accept PR, but do not plan |
+| **Close** | Already covered in code/docs, not reproducible, or out of project scope |
+
+**Effort:** S ≤ 1 day • M = 1–3 days • L = 1–2 weeks • XL > 2 weeks
+
+---
+
+## Executive summary
+
+- **The LTV compliance cluster is resolved** by the EU DSS (PAdES) signing engine (PR #422). Selecting `-eng dss` produces genuine PAdES B / B-T / B-LT / B-LTA output with a real DSS dictionary, full-chain revocation, and TSA-chain revocation material — something the OpenPDF engine structurally cannot satisfy. Standalone DocTimeStamp / LTA refresh is delivered as `--timestamp-only` — see `design-doc/3.2-doc-timestamp.md`.
+- **The algorithm-agility cluster (#23, #33, #255) is fixed** and no longer tracked here — see `design-doc/3.2-algorithm-agility.md`. It turned out to be mostly already solved; only the PKCS#11 PSS shape and the DSS TSA nonce needed code.
+- **PKCS#11 stability** is the largest *support-traffic* cluster. Most are environment-specific; a dedicated PKCS#11 troubleshooting page plus better diagnostics would absorb the recurring tickets at low engineering cost.
+- **Visible-signature rendering** (timezone, alignment, width/height, font size, date format) is the largest remaining user-visible cluster. Bundling them into a single "Visible Signature v2" release would close several tickets and materially raise perceived quality vs. Adobe's output.
+- **Documentation debt is real**: several open tickets are wholly or partly "user did not find the existing docs." A FAQ / troubleshooting chapter plus focused cookbook sections (TSA, PKCS#11, LTV, install channels) would retire those without touching code.
+
+---
+
+## Quick-close candidates
+
+Close-eligible conditional on verification (PR already merged or behaviour changed by OpenPDF 3 / JavaFX migration):
+
+| # | Title | Verify |
+|---|---|---|
+| **#63** | `LoginException: Unable to perform password callback` | Retest — likely benign on 3.x. |
+| **#139** | Comodo AAA auto-added to PKCS7 | Reporter never followed up. Close after a short investigation note in the FAQ. |
+
+---
+
+## LTV compliance — after the DSS engine (PR #422)
+
+The historically dominant LTV cluster is resolved. With `-eng dss` (and `engine.dss.online.enabled=true` or local trust material for LT/LTA), JSignPdf now produces signatures that meet ETSI EN 319 142-1 baseline PAdES B-LT / B-LTA. Standalone document timestamping / LTA refresh is delivered as `--timestamp-only` (see `design-doc/3.2-doc-timestamp.md`).
+
+**Remaining work:** none.
+
+---
+
+## Key-source pluggability cluster
+
+| # | Request |
+|---|---|
+| **#20** | Remote signatures via web API |
+| **#180** | Generic JCA provider (Azure Key Vault, AWS KMS, GCP HSM) |
+| **#187** | Multiple PKCS#11 providers |
+
+**Recommendation:** start with **#180 (M, P1)** — `--provider-class`/`--provider-arg` mirrors `jarsigner`, requires no new code paths, and largely subsumes #20. #187 (multi-PKCS#11) is a small follow-up once the provider mechanism is generalized.
+
+---
+
+## Visible-signature rendering cluster
+
+| # | Request | Priority |
+|---|---|---|
+| **#67** | Text alignment (left/center/right) | P2 |
+| **#99** | Font size honored when signer name is shown | P2 (OpenPDF 3 may have fixed; verify) |
+| **#165** | Width/height input (not four corners) | P2 |
+| **#231** | Configurable date format | P2 |
+| **#55** | Configurable timezone | P2 |
+
+**Recommendation — "Visible Signature v2" (M, 3–5 days):** bundle these into one release. Most are one- or two-line changes in `SignerLogic.java`, `VisibleSignatureDialog.java`, and `SignPdfForm.java`. Combined, they close several tickets and materially raise parity with Adobe's rendered signature.
+
+---
+
+## PKCS#11 / hardware token cluster
+
+Largely environment-specific:
+
+| # | Nature |
+|---|---|
+| **#63** | Still needs a retest on 3.x |
+| **#184** | Windows batch-mode hang after unregister — real bug in `PKCS11Utils.unregisterProviders` (P1) |
+| **#187** | Multi-provider support (P2, see pluggability cluster) |
+| **#491** | End-to-end PKCS#11 GUI onboarding UX — the biggest, best-articulated UX report in this cluster (P1) |
+
+**Recommendation:** fix **#184** in code (this is a reproducible Windows bug, not user env) and invest in a dedicated **PKCS#11 troubleshooting chapter** (`docs/pkcs11.md`) covering driver paths per OS, headless servers, login modes, and common errors. This one doc page will absorb the majority of PKCS#11 support issues at low cost.
+
+**#491 — PKCS#11 onboarding UX (P1, M):** the single most actionable UX ticket in this cluster. A national-eID user (Croatian Certilia) got the tool working only after an LLM-assisted troubleshooting session. Concrete, mostly independent sub-asks, roughly in ROI order:
+
+1. **`.so`/`.dll` file picker + provider-config editor in Preferences** — today users hand-edit `conf/pkcs11.cfg` in a text editor; a native file chooser for the library path (platform-correct extension) plus name/slot fields removes the highest-friction step. Optionally seed a small **known-provider dropdown** (Certilia, Belgian eID, etc.) with default library paths per OS.
+2. **PKCS#11 startup must not be able to kill the GUI (#491.3)** — a wrong-arch or bad library path currently throws during provider registration and the GUI never opens; the user must run `jsignpdfc` to see the stack trace. `PKCS11Utils.initPkcs11Provider` should fail soft: catch, surface a GUI error, and let the app start. Overlaps the #184 lifecycle code and the "error messages" cross-cutting theme.
+3. **Always show a "PKCS11" keystore-type entry (#491.1)** — even unconfigured, marked "not configured" and linking to docs, so the feature is discoverable on first launch instead of appearing only after a valid `pkcs11.cfg` exists.
+4. **Hide the "Keystore file" picker when keystore type is PKCS#11 (#491.5)** and give "Load Keys" clear GUI success/failure feedback instead of console-only messages.
+5. **Clarify the two entries "PKCS11" vs "JSIGNPKCS11" (#491.4)** — document/label what each is (JVM built-in SunPKCS11 vs JSignPdf-registered provider) or collapse to one.
+
+Sub-asks 2–4 are small, high-impact Swing/FX changes; verify each against the JavaFX code path first. Best delivered as a bundled **"PKCS#11 onboarding" release** alongside the `docs/pkcs11.md` page.
+
+---
+
+## Per-issue consolidated table
+
+Columns: **Status** — `close` (see quick-close list), `valid` (open, action needed), `docs` (resolvable by documentation), `cluster` (tracked in a cluster above), `partial` (partly covered by the DSS engine PR #422); **E** effort S/M/L/XL; **Pri** priority.
+
+| # | Title (short) | Status | E | Pri | Recommendation |
+|---|---|---|---|---|---|
+| 20 | Remote signatures via web API | cluster | L | P2 | Subsumed by #180 (JCA provider). |
+| 30 | Sign multiple docs in GUI | valid | M | P2 | Multi-select in JavaFX file chooser. CLI already supports it. |
+| 51 | Remove "Contact (optional)" | valid | S | P3 | Low priority — `/ContactInfo` is still a valid PAdES field; consider keeping but de-emphasizing. |
+| 55 | Timezone of signature date | cluster | S | P2 | Visible Signature v2. |
+| 63 | LoginException with PKCS11 | close? | S | P3 | Retest; add log suppression if cosmetic. |
+| 67 | Visible signature alignment | cluster | S | P2 | Visible Signature v2. |
+| 99 | Font size ignored with signer name | cluster | M | P2 | Visible Signature v2; verify vs. OpenPDF 3. |
+| 139 | Comodo AAA auto-added | close? | S | P3 | Reporter silent; investigate once, add FAQ, close. |
+| 140 | Validate-only mode | valid | XL | P2 | Out of historical focus; if pursued, delegate to EU DSS or PDFBox rather than re-implement. |
+| 148 | Show equivalent CLI in GUI | valid | M | P2 | High-value learning aid; nice-to-have. |
+| 165 | Width/height for visible sig | cluster | S | P2 | Visible Signature v2. |
+| 180 | JCA provider support | cluster | M | P1 | Key-source pluggability — `--provider-class`/`--provider-arg`. |
+| 184 | Batch-mode hangs after PKCS11 | valid | M | P1 | `AuthProvider.logout()`, remove the blind `Thread.sleep(1000)` in `PKCS11Utils.java:82-90`; force `System.exit` on CLI. |
+| 187 | Multiple PKCS11 providers | cluster | M | P2 | After #180 generalization. |
+| 231 | Date format | cluster | S | P2 | Visible Signature v2. Duplicate of #55 in spirit. |
+| 243 | `sun.misc.Unsafe` deprecation | valid | S | P2 | Track OpenPDF upstream; bump `openpdf.version` when fix lands. **Will be P0 on a future JDK.** |
+| 349 | Translate website | valid | M | P3 | Website i18n (Docusaurus i18n). Community-PR-friendly; not planned. |
+| 491 | PKCS#11 onboarding UX | cluster | M | P1 | See PKCS#11 cluster. Fail-soft provider load, file picker, discoverable keystore entry, hide file field, "Load Keys" feedback. |
+| 492 | Export/Import presets via GUI | valid | M | P2 | GUI wrapper over the existing properties-based config (load/save named preset files); optional bundled eIDAS/EU default presets. Pairs well with `-eng dss` PAdES defaults. |
+
+---
+
+## Cross-cutting themes
+
+1. **LTV was the single most valuable engineering investment — now delivered.** Six tickets, from 2019 onward, converged on the same gap; the DSS engine (PR #422) closed five of them outright, and `--timestamp-only` closed the last.
+2. **Error messages are the cheapest UX upgrade.** Several tickets surface stack traces where a one-line user-facing message would do (e.g. the residual #63 login noise). Adding a thin user-facing error layer pays off across dozens of tickets.
+3. **CLI ↔ GUI feature parity** (#30, #148) — the CLI has options the GUI lacks and vice versa. A small parity audit exposes most of them.
+4. **Packaging has quietly matured**: Flatpak, Windows jpackage with bundled JRE, macOS DMG. Several "it doesn't run" issues (#184, and #172 which was closed on these grounds) can be retired by steering users toward the bundled installer rather than `java -jar`.
+5. **Swing/JavaFX duality**: JavaFX is now the default GUI. Several Swing-only tickets (#30, #51, #67, #165) should first be verified against the FX code path before being worked on — some may already be moot.
+6. **Documentation discoverability** is a silent source of issues: #30 is partially "user didn't find the docs." A FAQ plus cookbook pages (TSA, PKCS#11, LTV, install channels) would absorb most of them.
+
+---
+
+## Suggested roadmap
+
+| Milestone | Contents | Effort | Closes |
+|---|---|---|---|
+| **3.1 — DSS engine (PAdES)** | EU DSS signing engine: PAdES B / T / LT / LTA, DSS dictionary, full-chain + TSA-chain revocation, TSA hash hardening, `--pades-level`, `--overwrite` (PR #422) | delivered | LTV cluster |
+| **3.2 — Algorithm agility + Key-source pluggability** | Algorithm agility delivered (#23, #33, #255 — see `design-doc/3.2-algorithm-agility.md`). Remaining: `--provider-class`/`--provider-arg` (#180), multi-PKCS#11 (#187), remote signing hook (#20) | ~1 week | #20, #180, #187 |
+| **3.3 — Visible Signature v2 + GUI parity** | #51, #55, #67, #99, #165, #231; JavaFX multi-select (#30); verbose CLI preview (#148) | ~1 week | several |
+| **3.4 — PKCS#11 onboarding** | Fail-soft provider load + GUI error (#491.3, overlaps #184); library file picker & provider-config editor (#491.2); discoverable/labeled keystore entries (#491.1, #491.4); hide file field + "Load Keys" feedback (#491.5); `docs/pkcs11.md` | ~1 week | #491 (+ absorbs support traffic) |
+| **Ongoing / low** | #140 (validation mode), #243 (track OpenPDF), #63/#139 (retest & close), #349 (website i18n), #492 (preset import/export) | — | as PRs arrive |
+
+---
+
+## Notes on methodology and caveats
+
+- Each expert report is based on the issue text, comment threads, and a fresh read of the code. Where an expert said "covered in current code," it was grep-verified. Where they said "duplicate," the referenced ticket was cross-checked.
+- The Swing → JavaFX migration means several "GUI bug" tickets should be retested on the FX code path before implementation effort is spent.
+- Priorities reflect project-maintainer perspective, not end-user urgency for a specific workflow.
+- This plan omits estimates for administrative work (release notes, Flathub listing, website updates) — assume ~1 day per milestone for that.

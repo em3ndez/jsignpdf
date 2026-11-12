@@ -1,0 +1,595 @@
+package net.sf.jsignpdf.engine.openpdf;
+
+import static net.sf.jsignpdf.Constants.L2TEXT_PLACEHOLDER_CONTACT;
+import static net.sf.jsignpdf.Constants.L2TEXT_PLACEHOLDER_LOCATION;
+import static net.sf.jsignpdf.Constants.L2TEXT_PLACEHOLDER_REASON;
+import static net.sf.jsignpdf.Constants.L2TEXT_PLACEHOLDER_SIGNER;
+import static net.sf.jsignpdf.Constants.L2TEXT_PLACEHOLDER_TIMESTAMP;
+import static net.sf.jsignpdf.Constants.L2TEXT_PLACEHOLDER_CERTIFICATE;
+import static net.sf.jsignpdf.Constants.L2TEXT_FONT_PATH;
+import static net.sf.jsignpdf.Constants.RES;
+import static net.sf.jsignpdf.Constants.LOGGER;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.Proxy;
+import java.security.MessageDigest;
+import java.security.PrivateKey;
+import java.security.cert.Certificate;
+import java.security.cert.X509Certificate;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.logging.Level;
+
+import net.sf.jsignpdf.BasicSignerOptions;
+import net.sf.jsignpdf.Constants;
+import net.sf.jsignpdf.PrivateKeyInfo;
+import net.sf.jsignpdf.crl.CRLInfo;
+import net.sf.jsignpdf.engine.Capability;
+import net.sf.jsignpdf.engine.EngineConfig;
+import net.sf.jsignpdf.engine.SigningEngine;
+import net.sf.jsignpdf.extcsp.CloudFoxy;
+import net.sf.jsignpdf.ssl.SSLInitializer;
+import net.sf.jsignpdf.types.BufferingMode;
+import net.sf.jsignpdf.types.HashAlgorithm;
+import net.sf.jsignpdf.types.PDFEncryption;
+import net.sf.jsignpdf.types.PdfVersion;
+import net.sf.jsignpdf.types.RenderMode;
+import net.sf.jsignpdf.types.ServerAuthentication;
+import net.sf.jsignpdf.utils.AppConfig;
+import net.sf.jsignpdf.utils.FontUtils;
+import net.sf.jsignpdf.utils.FontUtils.L2Font;
+import net.sf.jsignpdf.utils.KeyStoreUtils;
+import net.sf.jsignpdf.utils.PKCS11Utils;
+import net.sf.jsignpdf.utils.TextTimestampSubstitutor;
+
+import org.apache.commons.lang3.ArrayUtils;
+import org.apache.commons.lang3.StringUtils;
+
+import org.openpdf.text.DocumentException;
+import org.openpdf.text.Element;
+import org.openpdf.text.Font;
+import org.openpdf.text.Image;
+import org.openpdf.text.Phrase;
+import org.openpdf.text.Rectangle;
+import org.openpdf.text.pdf.ColumnText;
+import org.openpdf.text.pdf.AcroFields;
+import org.openpdf.text.pdf.OcspClientBouncyCastle;
+import org.openpdf.text.pdf.PdfDate;
+import org.openpdf.text.pdf.PdfDictionary;
+import org.openpdf.text.pdf.PdfName;
+import org.openpdf.text.pdf.PdfPKCS7;
+import org.openpdf.text.pdf.PdfReader;
+import org.openpdf.text.pdf.PdfSignature;
+import org.openpdf.text.pdf.PdfSignatureAppearance;
+import org.openpdf.text.pdf.PdfStamper;
+import org.openpdf.text.pdf.PdfTemplate;
+import org.openpdf.text.pdf.PdfString;
+import org.openpdf.text.pdf.PdfWriter;
+import org.openpdf.text.pdf.TSAClientBouncyCastle;
+
+/**
+ * The default JSignPdf signing engine. It uses OpenPDF (iText 2.1 lineage) to create the signature
+ * in the PDF &mdash; this is the exact code path JSignPdf used before the engine abstraction was
+ * introduced, so its output is unchanged.
+ *
+ * @author Josef Cacek
+ */
+public class OpenPdfSigningEngine implements SigningEngine {
+
+    /** Stable identifier used in config files and CLI args. */
+    public static final String ID = "openpdf";
+
+    private static final Set<Capability> CAPABILITIES = Set.copyOf(EnumSet.of(
+            Capability.SUBFILTER_ADBE_PKCS7_DETACHED,
+            Capability.HASH_SHA1, Capability.HASH_SHA256, Capability.HASH_SHA384, Capability.HASH_SHA512,
+            Capability.HASH_RIPEMD160,
+            Capability.OVERWRITE_MODE, Capability.CERTIFICATION_LEVEL,
+            Capability.ENCRYPTION_PASSWORD, Capability.ENCRYPTION_CERTIFICATE, Capability.PERMISSIONS_BITMASK,
+            Capability.VISIBLE_SIGNATURE, Capability.VISIBLE_LAYER2_TEXT, Capability.VISIBLE_LAYER4_TEXT,
+            Capability.VISIBLE_RENDER_MODE_DESCRIPTION_ONLY, Capability.VISIBLE_RENDER_MODE_GRAPHIC_AND_DESCRIPTION,
+            Capability.VISIBLE_RENDER_MODE_NAME_AND_DESCRIPTION, Capability.VISIBLE_BACKGROUND_IMAGE,
+            Capability.VISIBLE_BACKGROUND_IMAGE_SCALE, Capability.VISIBLE_SIGNATURE_GRAPHIC, Capability.VISIBLE_CUSTOM_FONT,
+            Capability.ACRO6_LAYERS, Capability.SIGN_EXISTING_FIELD,
+            Capability.TSA, Capability.TSA_POLICY_OID, Capability.TSA_BASIC_AUTH, Capability.OCSP_EMBED,
+            Capability.CRL_EMBED,
+            Capability.PROXY_SUPPORT,
+            Capability.EXTERNAL_DIGEST, Capability.PKCS11_PROVIDER));
+
+    @Override
+    public String id() {
+        return ID;
+    }
+
+    @Override
+    public String displayName() {
+        return "OpenPDF";
+    }
+
+    @Override
+    public Set<Capability> capabilities() {
+        return CAPABILITIES;
+    }
+
+    /**
+     * Signs the file described by options. The caller (dispatcher) is responsible for input/output
+     * file validation, engine-capability validation and firing the finished-event lifecycle; this
+     * method performs the actual OpenPDF signing and returns whether it succeeded.
+     */
+    @Override
+    public boolean sign(final BasicSignerOptions options, final EngineConfig engineConfig) {
+        final String outFile = options.getOutFileX();
+        boolean finished = false;
+        FileOutputStream fout = null;
+        File sigTempFile = null;
+        try {
+            SSLInitializer.init(options);
+
+            // Resolved up front so an unusable buffering.tempDir aborts before the output file is created
+            // and before the keystore is opened. The directory is only read in TEMP mode, so a stale path
+            // cannot break a memory-mode sign.
+            final BufferingMode bufferingMode = AppConfig.bufferingMode();
+            final File bufferingTempDir;
+            if (bufferingMode == BufferingMode.TEMP) {
+                try {
+                    bufferingTempDir = AppConfig.bufferingTempDir();
+                } catch (IOException e) {
+                    LOGGER.severe(e.getMessage());
+                    return false;
+                }
+                LOGGER.info(RES.get("console.buffering.temp", bufferingTempDir != null
+                        ? bufferingTempDir.getAbsolutePath() : System.getProperty("java.io.tmpdir")));
+            } else {
+                bufferingTempDir = null;
+            }
+
+            final PrivateKeyInfo pkInfo;
+            final PrivateKey key;
+            final Certificate[] chain;
+            // the 'cloudfoxy' crypto provider computes signatures externally and there are
+            // no
+            // certificates or keys available via Java CSPs -> they have to be pulled from
+            // an
+            // external source in 2 steps: 1. certificate chain, 2. signature itself
+            if (StringUtils.equalsIgnoreCase(options.getKsType(), Constants.KEYSTORE_TYPE_CLOUDFOXY)) {
+                key = null;
+                chain = CloudFoxy.getInstance().getChain(options);
+                if (chain == null) {
+                    return false;
+                }
+            } else {
+                pkInfo = KeyStoreUtils.getPkInfo(options);
+                if (pkInfo == null) {
+                    LOGGER.info(RES.get("console.certificateChainEmpty"));
+                    return false;
+                }
+                key = pkInfo.getKey();
+                chain = pkInfo.getChain();
+            }
+
+            if (ArrayUtils.isEmpty(chain)) {
+                // the certificate was not found
+                LOGGER.info(RES.get("console.certificateChainEmpty"));
+                return false;
+            }
+            LOGGER.info(RES.get("console.createPdfReader", options.getInFile()));
+            PdfReader reader;
+            try {
+                reader = new PdfReader(options.getInFile(), options.getPdfOwnerPwdStrX().getBytes());
+            } catch (Exception e) {
+                try {
+                    reader = new PdfReader(options.getInFile(), new byte[0]);
+                } catch (Exception e2) {
+                    // try to read without password
+                    reader = new PdfReader(options.getInFile());
+                }
+            }
+
+            LOGGER.info(RES.get("console.createOutPdf", outFile));
+            fout = new FileOutputStream(outFile);
+
+            final HashAlgorithm hashAlgorithm = options.getHashAlgorithmX();
+
+            LOGGER.info(RES.get("console.createSignature"));
+            String tmpPdfVersion = null; // default version - the same as input
+            String inputPdfVersion = reader.getPdfVersion();
+            String requiredPdfVersionForGivenHash = hashAlgorithm.getPdfVersion().getStringVersion();
+            if (inputPdfVersion != null && inputPdfVersion.compareTo(requiredPdfVersionForGivenHash) < 0) {
+                // this covers also problems with visible signatures (embedded
+                // fonts) in PDF 1.2, because the minimal version
+                // for hash algorithms is 1.3 (for SHA1)
+                final PdfVersion inputVersion = PdfVersion.fromStringVersion(inputPdfVersion);
+                final String inputVersionName = inputVersion != null ? inputVersion.getVersionName() : inputPdfVersion;
+                if (options.isAppendX()) {
+                    // OpenPDF can't rewrite the header version of an incremental update, so the document keeps
+                    // declaring the original version. This is a conformance detail only - the signature bytes and
+                    // their validation don't depend on the declared version.
+                    LOGGER.warning(RES.get("console.appendModeVersionNotUpdated",
+                            hashAlgorithm.getAlgorithmName(), hashAlgorithm.getPdfVersion().getVersionName(),
+                            inputVersionName, HashAlgorithm.valuesWithPdfVersionAsString()));
+                } else {
+                    tmpPdfVersion = requiredPdfVersionForGivenHash;
+                    LOGGER.info(RES.get("console.updateVersion", inputVersionName,
+                            hashAlgorithm.getPdfVersion().getVersionName()));
+                }
+            }
+
+            if (bufferingMode == BufferingMode.TEMP) {
+                // Own the temp file rather than letting createSignature() make one: OpenPDF never returns
+                // the name and only deletes it in close(), so an abort between preClose() and close() —
+                // exactly where TSA/OCSP failures land — would leak a file the size of the document.
+                sigTempFile = File.createTempFile("jsignpdf-sig-", ".pdf", bufferingTempDir);
+            }
+            final PdfStamper stp = PdfStamper.createSignature(reader, fout, tmpPdfVersion, sigTempFile,
+                    options.isAppendX());
+            if (!options.isAppendX()) {
+                // we are not in append mode, let's remove existing signatures
+                // (otherwise we're getting to troubles)
+                final AcroFields acroFields = stp.getAcroFields();
+                @SuppressWarnings("unchecked")
+                final List<String> sigNames = acroFields.getSignedFieldNames();
+                for (String sigName : sigNames) {
+                    acroFields.removeField(sigName);
+                }
+            }
+            if (options.isAdvanced() && options.getPdfEncryption() != PDFEncryption.NONE) {
+                LOGGER.info(RES.get("console.setEncryption"));
+                final int tmpRight = options.getRightPrinting().getRight() | (options.isRightCopy() ? PdfWriter.ALLOW_COPY : 0)
+                        | (options.isRightAssembly() ? PdfWriter.ALLOW_ASSEMBLY : 0)
+                        | (options.isRightFillIn() ? PdfWriter.ALLOW_FILL_IN : 0)
+                        | (options.isRightScreanReaders() ? PdfWriter.ALLOW_SCREENREADERS : 0)
+                        | (options.isRightModifyAnnotations() ? PdfWriter.ALLOW_MODIFY_ANNOTATIONS : 0)
+                        | (options.isRightModifyContents() ? PdfWriter.ALLOW_MODIFY_CONTENTS : 0);
+                switch (options.getPdfEncryption()) {
+                    case PASSWORD:
+                        if (StringUtils.isEmpty(options.getPdfOwnerPwdStrX())) {
+                            LOGGER.severe(RES.get("console.pdfEncError.missingOwnerPassword"));
+                            return false;
+                        }
+                        if (StringUtils.isEmpty(options.getPdfUserPwdStr())) {
+                            LOGGER.severe(RES.get("console.pdfEncError.missingUserPassword"));
+                            return false;
+                        }
+                        stp.setEncryption(true, options.getPdfUserPwdStr(), options.getPdfOwnerPwdStrX(), tmpRight);
+                        break;
+                    case CERTIFICATE:
+                        final X509Certificate encCert = KeyStoreUtils.loadCertificate(options.getPdfEncryptionCertFile());
+                        if (encCert == null) {
+                            LOGGER.severe(RES.get("console.pdfEncError.wrongCertificateFile",
+                                    StringUtils.defaultString(options.getPdfEncryptionCertFile())));
+                            return false;
+                        }
+                        if (!KeyStoreUtils.isEncryptionSupported(encCert)) {
+                            LOGGER.severe(RES.get("console.pdfEncError.cantUseCertificate", encCert.getSubjectDN().getName()));
+                            return false;
+                        }
+                        stp.setEncryption(new Certificate[] { encCert }, new int[] { tmpRight }, PdfWriter.ENCRYPTION_AES_128);
+                        break;
+                    default:
+                        LOGGER.severe(RES.get("console.unsupportedEncryptionType"));
+                        return false;
+                }
+            }
+
+            final PdfSignatureAppearance sap = stp.getSignatureAppearance();
+            sap.setCrypto(key, chain, null, PdfSignatureAppearance.WINCER_SIGNED);
+            final String reason = options.getReason();
+            if (StringUtils.isNotEmpty(reason)) {
+                LOGGER.info(RES.get("console.setReason", reason));
+                sap.setReason(reason);
+            }
+            final String location = options.getLocation();
+            if (StringUtils.isNotEmpty(location)) {
+                LOGGER.info(RES.get("console.setLocation", location));
+                sap.setLocation(location);
+            }
+            final String contact = options.getContact();
+            if (StringUtils.isNotEmpty(contact)) {
+                LOGGER.info(RES.get("console.setContact", contact));
+                sap.setContact(contact);
+            }
+            LOGGER.info(RES.get("console.setCertificationLevel"));
+            sap.setCertificationLevel(options.getCertLevelX().getLevel());
+
+            if (options.isVisible()) {
+                // visible signature is enabled
+                LOGGER.info(RES.get("console.configureVisible"));
+                LOGGER.info(RES.get("console.setAcro6Layers", Boolean.toString(options.isAcro6Layers())));
+                sap.setAcro6Layers(options.isAcro6Layers());
+
+                final String tmpImgPath = options.getImgPath();
+                if (tmpImgPath != null) {
+                    LOGGER.info(RES.get("console.createImage", tmpImgPath));
+                    final Image img = Image.getInstance(tmpImgPath);
+                    LOGGER.info(RES.get("console.setSignatureGraphic"));
+                    sap.setSignatureGraphic(img);
+                }
+                final String tmpBgImgPath = options.getBgImgPath();
+                if (tmpBgImgPath != null) {
+                    LOGGER.info(RES.get("console.createImage", tmpBgImgPath));
+                    final Image img = Image.getInstance(tmpBgImgPath);
+                    LOGGER.info(RES.get("console.setImage"));
+                    sap.setImage(img);
+                }
+                LOGGER.info(RES.get("console.setImageScale"));
+                sap.setImageScale(options.getBgImgScale());
+                LOGGER.info(RES.get("console.setL2Text"));
+                String signer = PdfPKCS7.getSubjectFields((X509Certificate) chain[0]).getField("CN");
+                if (StringUtils.isNotEmpty(options.getSignerName())) {
+                    signer = options.getSignerName();
+                }
+                final String certificate = PdfPKCS7.getSubjectFields((X509Certificate) chain[0]).toString();
+                final Date signDate = sap.getSignDateNullSafe().getTime();
+                final String timestamp = new SimpleDateFormat("yyyy.MM.dd HH:mm:ss z").format(signDate);
+                final String l2text;
+                if (options.getL2Text() == null) {
+                    final StringBuilder buf = new StringBuilder();
+                    buf.append(RES.get("default.l2text.signedBy")).append(" ").append(signer).append('\n');
+                    buf.append(RES.get("default.l2text.date")).append(" ").append(timestamp);
+                    if (StringUtils.isNotEmpty(reason))
+                        buf.append('\n').append(RES.get("default.l2text.reason")).append(" ").append(reason);
+                    if (StringUtils.isNotEmpty(location))
+                        buf.append('\n').append(RES.get("default.l2text.location")).append(" ").append(location);
+                    l2text = buf.toString();
+                } else {
+                    final Map<String, String> replacements = new HashMap<String, String>();
+                    replacements.put(L2TEXT_PLACEHOLDER_SIGNER, StringUtils.defaultString(signer));
+                    replacements.put(L2TEXT_PLACEHOLDER_CERTIFICATE, certificate);
+                    replacements.put(L2TEXT_PLACEHOLDER_TIMESTAMP, timestamp);
+                    replacements.put(L2TEXT_PLACEHOLDER_LOCATION, StringUtils.defaultString(location));
+                    replacements.put(L2TEXT_PLACEHOLDER_REASON, StringUtils.defaultString(reason));
+                    replacements.put(L2TEXT_PLACEHOLDER_CONTACT, StringUtils.defaultString(contact));
+                    l2text = TextTimestampSubstitutor.replace(options.getL2Text(), replacements, signDate);
+                }
+                sap.setLayer2Text(l2text);
+                final L2Font l2Font = FontUtils.getL2Font(l2text);
+                final org.openpdf.text.pdf.BaseFont l2BaseFont = OpenPdfFonts.getL2BaseFont(l2Font);
+                if (l2BaseFont == null) {
+                    LOGGER.severe(RES.get("console.font.loadFailed", l2Font != null ? l2Font.getName()
+                            : StringUtils.defaultString(AppConfig.fontPath(), L2TEXT_FONT_PATH)));
+                    return false;
+                }
+                // A non-Identity encoding makes a simple font, which drops characters outside the encoding.
+                final String missing = l2Font.missingCharacters(l2text);
+                if (!missing.isEmpty()) {
+                    LOGGER.severe(RES.get("console.font.missingGlyphs", l2Font.getName(), missing));
+                    return false;
+                }
+                LOGGER.info(RES.get("console.setL2Font", l2Font.getName()));
+                sap.setLayer2Font(new Font(l2BaseFont, options.getL2TextFontSize()));
+                LOGGER.info(RES.get("console.setL4Text"));
+                sap.setLayer4Text(options.getL4Text());
+                LOGGER.info(RES.get("console.setRender"));
+                RenderMode renderMode = options.getRenderMode();
+                if (renderMode == RenderMode.GRAPHIC_AND_DESCRIPTION && sap.getSignatureGraphic() == null) {
+                    LOGGER.warning(
+                            "Render mode of visible signature is set to GRAPHIC_AND_DESCRIPTION, but no image is loaded. Fallback to DESCRIPTION_ONLY.");
+                    LOGGER.info(RES.get("console.renderModeFallback"));
+                    renderMode = RenderMode.DESCRIPTION_ONLY;
+                }
+                sap.setRender(renderMode.getRender());
+                LOGGER.info(RES.get("console.setVisibleSignature"));
+                final String sigFieldName = options.getSigFieldNameX();
+                if (sigFieldName != null) {
+                    // The field's own /Rect and page win - OpenPDF reads both from the field itself (and
+                    // applies the page rotation), so the configured coordinates are not used at all.
+                    LOGGER.info(RES.get("console.sigField.placing", sigFieldName));
+                    sap.setVisibleSignature(sigFieldName);
+                } else {
+                    int page = options.getPage();
+                    if (page < 1 || page > reader.getNumberOfPages()) {
+                        page = reader.getNumberOfPages();
+                    }
+                    Rectangle signitureRect = computeSignatureRectangle(reader.getPageSize(page), options);
+                    sap.setVisibleSignature(signitureRect, page, null);
+                }
+                if (renderMode == RenderMode.DESCRIPTION_ONLY) {
+                    configureDescriptionLayer2(sap, options.isAcro6Layers());
+                }
+            }
+
+            LOGGER.info(RES.get("console.processing"));
+            final PdfSignature dic = new PdfSignature(PdfName.ADOBE_PPKLITE, new PdfName("adbe.pkcs7.detached"));
+            if (!StringUtils.isEmpty(reason)) {
+                dic.setReason(sap.getReason());
+            }
+            if (!StringUtils.isEmpty(location)) {
+                dic.setLocation(sap.getLocation());
+            }
+            if (!StringUtils.isEmpty(contact)) {
+                dic.setContact(sap.getContact());
+            }
+            dic.setDate(new PdfDate(sap.getSignDateNullSafe()));
+            sap.setCryptoDictionary(dic);
+
+            final Proxy tmpProxy = options.createProxy();
+
+            final CRLInfo crlInfo = new CRLInfo(options, chain);
+
+            // CRLs are stored twice in PDF c.f.
+            // PdfPKCS7.getAuthenticatedAttributeBytes
+            final int contentEstimated = (int) (Constants.DEFVAL_SIG_SIZE + 2L * crlInfo.getByteCount());
+            final Map<PdfName, Integer> exc = new HashMap<PdfName, Integer>();
+            exc.put(PdfName.CONTENTS, new Integer(contentEstimated * 2 + 2));
+            sap.preClose(exc);
+
+            String provider = PKCS11Utils.getProviderName(options);
+            PdfPKCS7 sgn = new PdfPKCS7(key, chain, crlInfo.getCrls(), hashAlgorithm.getAlgorithmName(), provider, false);
+            InputStream data = sap.getRangeStream();
+            final MessageDigest messageDigest = MessageDigest.getInstance(hashAlgorithm.getAlgorithmName());
+            byte buf[] = new byte[8192];
+            int n;
+            while ((n = data.read(buf)) > 0) {
+                messageDigest.update(buf, 0, n);
+            }
+            byte hash[] = messageDigest.digest();
+            Calendar cal = Calendar.getInstance();
+            byte[] ocsp = null;
+            if (options.isOcspEnabledX() && chain.length >= 2) {
+                LOGGER.info(RES.get("console.getOCSPURL"));
+                String url = PdfPKCS7.getOCSPURL((X509Certificate) chain[0]);
+                if (StringUtils.isEmpty(url)) {
+                    // get from options
+                    LOGGER.info(RES.get("console.noOCSPURL"));
+                    url = options.getOcspServerUrl();
+                }
+                if (!StringUtils.isEmpty(url)) {
+                    LOGGER.info(RES.get("console.readingOCSP", url));
+                    final OcspClientBouncyCastle ocspClient = new OcspClientBouncyCastle((X509Certificate) chain[0],
+                            (X509Certificate) chain[1], url);
+                    ocspClient.setProxy(tmpProxy);
+                    ocsp = ocspClient.getEncoded();
+                }
+            }
+            byte sh[] = sgn.getAuthenticatedAttributeBytes(hash, cal, ocsp);
+
+            // THIS IS THE SIGNING, we need to have a new branch for external signers
+            if (StringUtils.equalsIgnoreCase(options.getKsType(), Constants.KEYSTORE_TYPE_CLOUDFOXY)) {
+                byte[] signature = CloudFoxy.getInstance().getSignature(options, sh);
+                if (signature == null) {
+                    return false;
+                } else {
+                    sgn.setExternalDigest(signature, null, "RSA");
+                }
+            } else {
+                sgn.update(sh, 0, sh.length);
+            }
+
+            TSAClientBouncyCastle tsc = null;
+            if (options.isTimestampX() && !StringUtils.isEmpty(options.getTsaUrl())) {
+                LOGGER.info(RES.get("console.creatingTsaClient"));
+                if (options.getTsaServerAuthn() == ServerAuthentication.PASSWORD) {
+                    tsc = new TSAClientBouncyCastle(options.getTsaUrl(), StringUtils.defaultString(options.getTsaUser()),
+                            StringUtils.defaultString(options.getTsaPasswd()));
+                } else {
+                    tsc = new TSAClientBouncyCastle(options.getTsaUrl());
+
+                }
+                final String tsaHashAlg = options.getTsaHashAlgWithFallback();
+                LOGGER.info(RES.get("console.settingTsaHashAlg", tsaHashAlg));
+                tsc.setDigestName(tsaHashAlg);
+                tsc.setProxy(tmpProxy);
+                final String policyOid = options.getTsaPolicy();
+                if (StringUtils.isNotEmpty(policyOid)) {
+                    LOGGER.info(RES.get("console.settingTsaPolicy", policyOid));
+                    tsc.setPolicy(policyOid);
+                }
+            }
+            byte[] encodedSig = sgn.getEncodedPKCS7(hash, cal, tsc, ocsp);
+
+            if (contentEstimated + 2 < encodedSig.length) {
+                System.err.println("SigSize - contentEstimated=" + contentEstimated + ", sigLen=" + encodedSig.length);
+                throw new Exception("Not enough space");
+            }
+
+            byte[] paddedSig = new byte[contentEstimated];
+            System.arraycopy(encodedSig, 0, paddedSig, 0, encodedSig.length);
+
+            PdfDictionary dic2 = new PdfDictionary();
+            dic2.put(PdfName.CONTENTS, new PdfString(paddedSig).setHexWriting(true));
+            LOGGER.info(RES.get("console.closeStream"));
+            sap.close(dic2);
+            fout.close();
+            fout = null;
+            finished = true;
+        } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, RES.get("console.exception"), e);
+        } catch (OutOfMemoryError e) {
+            LOGGER.log(Level.SEVERE, RES.get("console.memoryError"), e);
+        } finally {
+            if (fout != null) {
+                try {
+                    fout.close();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+            if (sigTempFile != null && sigTempFile.exists() && !sigTempFile.delete()) {
+                // Windows refuses to delete a file that is still open, and an abort between preClose() and
+                // close() leaves OpenPDF's RandomAccessFile on this one open with no way to reach it. Say so
+                // instead of silently leaving a document-sized file behind. The exists() guard keeps the
+                // success path quiet, where OpenPDF's own close() already deleted it.
+                LOGGER.warning(RES.get("console.buffering.tempFileNotDeleted", sigTempFile.getAbsolutePath()));
+            }
+        }
+        return finished;
+    }
+
+    /** OpenPDF's own description-layer inset, kept for the legacy layer-4 layout. */
+    private static final float LAYER2_MARGIN = 2f;
+    /** Fraction of the rectangle OpenPDF reserves at the top for the layer-4 status text. */
+    private static final float LAYER4_TOP_SECTION = 0.3f;
+
+    /**
+     * Builds the description-only layer 2 appearance.
+     *
+     * <p>With acro6 layers (the default) there is no separate layer-4 status text, so the
+     * description uses the whole signature rectangle - OpenPDF 3.0.5 would otherwise reserve
+     * the top 30% and clip multiline text in short rectangles. With the legacy multi-layer
+     * appearance ({@code acro6Layers = false}) OpenPDF still draws layer 4 in that top 30%, so
+     * the description is confined to the bottom 70% to avoid overlapping it. Creating layer 2
+     * explicitly keeps the public OpenPDF dependency unchanged.</p>
+     */
+    private void configureDescriptionLayer2(final PdfSignatureAppearance sap, final boolean acro6Layers)
+            throws DocumentException {
+        final PdfTemplate layer = sap.getLayer(2);
+        final Rectangle rect = sap.getRect();
+
+        final Image background = sap.getImage();
+        if (background != null) {
+            final float imageScale = sap.getImageScale();
+            if (imageScale == 0) {
+                layer.addImage(background, rect.getWidth(), 0, 0, rect.getHeight(), 0, 0);
+            } else {
+                float usableScale = imageScale;
+                if (imageScale < 0) {
+                    usableScale = Math.min(rect.getWidth() / background.getWidth(),
+                            rect.getHeight() / background.getHeight());
+                }
+                final float width = background.getWidth() * usableScale;
+                final float height = background.getHeight() * usableScale;
+                final float x = (rect.getWidth() - width) / 2;
+                final float y = (rect.getHeight() - height) / 2;
+                layer.addImage(background, width, 0, 0, height, x, y);
+            }
+        }
+
+        final Font configuredFont = sap.getLayer2Font();
+        final Font font = configuredFont == null ? new Font() : new Font(configuredFont);
+        float size = font.getSize();
+        final String text = StringUtils.defaultString(sap.getLayer2Text());
+        final Rectangle dataRect = acro6Layers
+                ? new Rectangle(0, 0, rect.getWidth(), rect.getHeight())
+                : new Rectangle(LAYER2_MARGIN, LAYER2_MARGIN, rect.getWidth() - LAYER2_MARGIN,
+                        rect.getHeight() * (1f - LAYER4_TOP_SECTION) - LAYER2_MARGIN);
+        if (size <= 0) {
+            final Rectangle fitRect = new Rectangle(dataRect.getWidth(), dataRect.getHeight());
+            size = PdfSignatureAppearance.fitText(font, text, fitRect, 12, sap.getRunDirection());
+        }
+
+        final ColumnText column = new ColumnText(layer);
+        column.setRunDirection(sap.getRunDirection());
+        column.setSimpleColumn(new Phrase(text, font), dataRect.getLeft(), dataRect.getBottom(),
+                dataRect.getRight(), dataRect.getTop(), size, Element.ALIGN_LEFT);
+        column.go();
+    }
+
+    private Rectangle computeSignatureRectangle(Rectangle pageRect, BasicSignerOptions options) {
+        float pgWidth = pageRect.getWidth();
+        float pgHeighth = pageRect.getHeight();
+        return new Rectangle(fixPosition(options.getPositionLLX(), pgWidth), fixPosition(options.getPositionLLY(), pgHeighth),
+                fixPosition(options.getPositionURX(), pgWidth), fixPosition(options.getPositionURY(), pgHeighth));
+    }
+
+    private float fixPosition(float origPos, float base) {
+        return origPos >= 0 ? origPos : base + origPos;
+    }
+}

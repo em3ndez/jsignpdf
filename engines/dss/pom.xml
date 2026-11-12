@@ -1,0 +1,102 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <artifactId>jsignpdf-engine-dss</artifactId>
+    <packaging>jar</packaging>
+    <name>${project.artifactId}</name>
+    <description>JSignPdf EU-DSS-based PAdES signing engine (B/T/LT/LTA)</description>
+
+    <parent>
+        <groupId>com.github.kwart.jsign</groupId>
+        <artifactId>jsignpdf-root</artifactId>
+        <version>3.3.0-SNAPSHOT</version>
+        <relativePath>../../pom.xml</relativePath>
+    </parent>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.github.kwart.jsign</groupId>
+            <artifactId>jsignpdf-engine-api</artifactId>
+        </dependency>
+
+        <!-- DSS artifacts (versions managed by the dss-bom import in the root pom) -->
+        <dependency>
+            <groupId>eu.europa.ec.joinup.sd-dss</groupId>
+            <artifactId>dss-pades-pdfbox</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>eu.europa.ec.joinup.sd-dss</groupId>
+            <artifactId>dss-cms-object</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>eu.europa.ec.joinup.sd-dss</groupId>
+            <artifactId>dss-token</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>eu.europa.ec.joinup.sd-dss</groupId>
+            <artifactId>dss-service</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>eu.europa.ec.joinup.sd-dss</groupId>
+            <artifactId>dss-utils-apache-commons</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>eu.europa.ec.joinup.sd-dss</groupId>
+            <artifactId>dss-tsl-validation</artifactId>
+        </dependency>
+        <!-- TS 119612 v2.1.1 trusted-list model: DSS only declares this optionally, but
+             dss-tsl-validation needs TrustedList211Utils at runtime when parsing trusted lists
+             (verifyTLVersionConformity). Without it the whole LOTL path fails to parse. -->
+        <dependency>
+            <groupId>eu.europa.ec.joinup.sd-dss</groupId>
+            <artifactId>specs-trusted-list-v211</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>eu.europa.ec.joinup.sd-dss</groupId>
+            <artifactId>dss-crl-parser-x509crl</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+        </dependency>
+
+        <!-- Used directly by the engine (Loader / PDDocument for encrypt-before-sign and page geometry);
+             declared explicitly rather than relied upon transitively via dss-pades-pdfbox. -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- BouncyCastle: CapturingTspSource parses the RFC 3161 timestamp token (DSS TimestampToken, whose
+             constructor declares BC's TSPException/CMSException) to record the timestamp chain for the
+             untrusted-chain diagnostics (issue #448); the tests also use it (BC provider + embedded TSA server).
+             Already on the runtime classpath via DSS, so this only widens the compile scope. -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-jdk18on</artifactId>
+        </dependency>
+
+        <!-- DSS validation: required at runtime by the trusted-list validation job (TLValidatorTask uses
+             SignedDocumentValidator to verify LOTL/TL signatures); also used by the tests to read back the
+             achieved PAdES level. dss-policy-jaxb supplies the default validation policy (policy/constraint.xml). -->
+        <dependency>
+            <groupId>eu.europa.ec.joinup.sd-dss</groupId>
+            <artifactId>dss-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>eu.europa.ec.joinup.sd-dss</groupId>
+            <artifactId>dss-policy-jaxb</artifactId>
+        </dependency>
+    </dependencies>
+</project>

@@ -1,32 +1,3 @@
-/*
- * The contents of this file are subject to the Mozilla Public License
- * Version 1.1 (the "License"); you may not use this file except in
- * compliance with the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
- * License for the specific language governing rights and limitations
- * under the License.
- *
- * The Original Code is 'JSignPdf, a free application for PDF signing'.
- *
- * The Initial Developer of the Original Code is Josef Cacek.
- * Portions created by Josef Cacek are Copyright (C) Josef Cacek. All Rights Reserved.
- *
- * Contributor(s): Josef Cacek.
- *
- * Alternatively, the contents of this file may be used under the terms
- * of the GNU Lesser General Public License, version 2.1 (the  "LGPL License"), in which case the
- * provisions of LGPL License are applicable instead of those
- * above. If you wish to allow use of your version of this file only
- * under the terms of the LGPL License and not to allow others to use
- * your version of this file under the MPL, indicate your decision by
- * deleting the provisions above and replace them with the notice and
- * other provisions required by the LGPL License. If you do not delete
- * the provisions above, a recipient may use your version of this file
- * under either the MPL or the LGPL License.
- */
 package net.sf.jsignpdf;
 
 import static net.sf.jsignpdf.Constants.RES;
@@ -56,10 +27,12 @@ import net.sf.jsignpdf.types.CertificationLevel;
 import net.sf.jsignpdf.types.HashAlgorithm;
 import net.sf.jsignpdf.types.PDFEncryption;
 import net.sf.jsignpdf.types.PrintRight;
+import net.sf.jsignpdf.utils.AppConfig;
 import net.sf.jsignpdf.utils.GuiUtils;
 import net.sf.jsignpdf.utils.KeyStoreUtils;
 import net.sf.jsignpdf.utils.PKCS11Utils;
 import net.sf.jsignpdf.utils.PropertyProvider;
+import net.sf.jsignpdf.utils.PropertyStoreFactory;
 
 import org.apache.commons.lang3.StringUtils;
 
@@ -74,7 +47,7 @@ public class SignPdfForm extends javax.swing.JFrame implements SignResultListene
 
     private SignerFileChooser fileChooser = new SignerFileChooser();
 
-    protected final PropertyProvider props = PropertyProvider.getInstance();
+    protected final PropertyProvider props = PropertyStoreFactory.getInstance().mainConfig();
 
     private boolean autoclose = false;
     private BasicSignerOptions options;
@@ -438,7 +411,7 @@ public class SignPdfForm extends javax.swing.JFrame implements SignResultListene
                     justName = justName.substring(0, dotPosition);
                 }
 
-                File signedPDF = new File(f.getParentFile(), justName + "_signed.pdf");
+                File signedPDF = new File(f.getParentFile(), justName + AppConfig.defaultOutSuffix() + ".pdf");
 
                 tfOutPdfFile.setText(signedPDF.getPath());
             }
@@ -528,7 +501,7 @@ public class SignPdfForm extends javax.swing.JFrame implements SignResultListene
 
         infoTextArea.setColumns(80);
         infoTextArea.setEditable(false);
-        infoTextArea.setFont(new java.awt.Font("Courier New", 1, 10)); // NOI18N
+        infoTextArea.setFont(new java.awt.Font("Monospaced", 1, 10)); // NOI18N
         infoTextArea.setRows(25);
         infoTextArea.setMinimumSize(new java.awt.Dimension(200, 180));
         infoTextArea.setLineWrap(true);
@@ -990,7 +963,7 @@ public class SignPdfForm extends javax.swing.JFrame implements SignResultListene
         gridBagConstraints.insets = new java.awt.Insets(2, 0, 2, 0);
         getContentPane().add(chkbAppendSignature, gridBagConstraints);
 
-        btnSignIt.setFont(new java.awt.Font("Tahoma", 1, 12)); // NOI18N
+        btnSignIt.setFont(new java.awt.Font("SansSerif", 1, 12)); // NOI18N
         btnSignIt.setIcon(new javax.swing.ImageIcon(getClass().getResource("/net/sf/jsignpdf/signedpdf26.png"))); // NOI18N
         btnSignIt.setText("Sign It");
         btnSignIt.addActionListener(new java.awt.event.ActionListener() {

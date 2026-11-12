@@ -1,34 +1,6 @@
-/*
- * The contents of this file are subject to the Mozilla Public License
- * Version 1.1 (the "License"); you may not use this file except in
- * compliance with the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
- * License for the specific language governing rights and limitations
- * under the License.
- *
- * The Original Code is 'JSignPdf, a free application for PDF signing'.
- *
- * The Initial Developer of the Original Code is Josef Cacek.
- * Portions created by Josef Cacek are Copyright (C) Josef Cacek. All Rights Reserved.
- *
- * Contributor(s): Josef Cacek.
- *
- * Alternatively, the contents of this file may be used under the terms
- * of the GNU Lesser General Public License, version 2.1 (the  "LGPL License"), in which case the
- * provisions of LGPL License are applicable instead of those
- * above. If you wish to allow use of your version of this file only
- * under the terms of the LGPL License and not to allow others to use
- * your version of this file under the MPL, indicate your decision by
- * deleting the provisions above and replace them with the notice and
- * other provisions required by the LGPL License. If you do not delete
- * the provisions above, a recipient may use your version of this file
- * under either the MPL or the LGPL License.
- */
 package net.sf.jsignpdf;
 
+import static net.sf.jsignpdf.Constants.EXIT_CODE_COMMON_ERROR;
 import static net.sf.jsignpdf.Constants.EXIT_CODE_NO_COMMAND;
 import static net.sf.jsignpdf.Constants.EXIT_CODE_PARSE_ERR;
 import static net.sf.jsignpdf.Constants.NEW_LINE;
@@ -44,16 +16,27 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 
+import javax.swing.JOptionPane;
 import javax.swing.UIManager;
 import javax.swing.WindowConstants;
 
+import net.sf.jsignpdf.engine.EngineRegistry;
+import net.sf.jsignpdf.engine.SigningEngine;
 import net.sf.jsignpdf.ssl.SSLInitializer;
-import net.sf.jsignpdf.utils.ConfigProvider;
+import net.sf.jsignpdf.types.SignatureFieldInfo;
+import net.sf.jsignpdf.utils.AppConfig;
 import net.sf.jsignpdf.utils.GuiUtils;
 import net.sf.jsignpdf.utils.KeyStoreUtils;
+import net.sf.jsignpdf.pkcs11.Pkcs11Exception;
+import net.sf.jsignpdf.pkcs11.Pkcs11Profile;
+import net.sf.jsignpdf.pkcs11.Pkcs11Profiles;
+import net.sf.jsignpdf.pkcs11.ProfileStatus;
 import net.sf.jsignpdf.utils.PKCS11Utils;
+import net.sf.jsignpdf.utils.UiLocale;
 
 import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.ParseException;
@@ -71,15 +54,103 @@ import org.apache.commons.lang3.StringUtils;
  */
 public class Signer {
 
+    /** GitHub issues URL shown in the JavaFX fallback warning dialog. */
+    static final String GITHUB_ISSUES_URL = "https://github.com/intoolswetrust/jsignpdf/issues";
+
+    // Package-private launch hooks. Tests replace these to drive launchGui without opening real windows.
+    // The FxLauncher class is loaded reflectively so this Signer class stays loadable when JavaFX
+    // is not on the classpath (minimal cross-platform ZIP / CLI-only deployments).
+    static Consumer<BasicSignerOptions> fxLauncher = Signer::invokeFxLauncher;
+    static Consumer<BasicSignerOptions> swingLauncher = Signer::doLaunchSwing;
+    static Consumer<Throwable> fxFallbackNotifier = Signer::showFxFallbackWarning;
+
+    private static void invokeFxLauncher(BasicSignerOptions opts) {
+        try {
+            Class<?> fxLauncherClass = Class.forName("net.sf.jsignpdf.fx.FxLauncher");
+            fxLauncherClass.getMethod("launch", BasicSignerOptions.class).invoke(null, opts);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException) {
+                throw (RuntimeException) cause;
+            }
+            if (cause instanceof Error) {
+                throw (Error) cause;
+            }
+            throw new RuntimeException(cause != null ? cause : e);
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     /**
      * Prints formatted help message (command line arguments).
      */
     private static void printHelp() {
         final HelpFormatter formatter = new HelpFormatter();
-        formatter.printHelp(80, "java -jar JSignPdf.jar [file1.pdf [file2.pdf ...]]", RES.get("hlp.header"),
+        formatter.printHelp(80, "jsignpdf [file1.pdf [file2.pdf ...]]", RES.get("hlp.header"),
                 SignerOptionsFromCmdLine.OPTS, NEW_LINE + RES.get("hlp.footer.exitCodes") + NEW_LINE
                         + StringUtils.repeat("-", 80) + NEW_LINE + RES.get("hlp.footer.examples"),
                 true);
+    }
+
+    /**
+     * Prints the registered signing engines, one per line as {@code <id> - <displayName>}, with the
+     * default engine annotated. Used by the {@code --list-engines} command.
+     */
+    private static void listEngines() {
+        final EngineRegistry registry = EngineRegistry.getInstance();
+        final SigningEngine defaultEngine = registry.getDefault().orElse(null);
+        LOGGER.info(RES.get("console.engines"));
+        for (SigningEngine engine : registry.listAll()) {
+            String line = RES.get("console.listEngines.line", new String[] { engine.id(), engine.displayName() });
+            if (defaultEngine != null && engine.id().equals(defaultEngine.id())) {
+                line = line + " " + RES.get("console.listEngines.default");
+            }
+            System.out.println(line);
+        }
+    }
+
+    /**
+     * Prints every PKCS#11 profile with its state. Each usable profile is registered to report it. Used by the
+     * {@code --list-keystore-providers} command.
+     */
+    private static void listKeyStoreProviders() {
+        final Pkcs11Profiles profiles = Pkcs11Profiles.getInstance();
+        LOGGER.info(RES.get("console.keystoreProviders"));
+        for (Pkcs11Profile profile : profiles.list()) {
+            profiles.register(profile.id());
+        }
+        for (ProfileStatus status : profiles.statuses()) {
+            final Pkcs11Profile profile = profiles.find(status.id()).orElse(null);
+            final String label = profile != null ? profile.displayLabel() : status.id();
+            final String types = profile != null ? String.join(", ", profile.offeredTypes()) : "-";
+            String state = status.state().name();
+            if (status.message() != null) {
+                state = state + " - " + status.message();
+            }
+            System.out.println(RES.get("console.listKsProviders.line", status.id(), label, types, state));
+        }
+    }
+
+    /**
+     * Resolves the PKCS#11 profile before any key access, so a missing or ambiguous profile is reported plainly.
+     *
+     * @return {@code false} when the selection cannot be resolved (the reason has been printed)
+     */
+    static boolean checkPkcs11Selection(BasicSignerOptions opts) {
+        if (!PKCS11Utils.isPkcs11Type(opts.getKsType())) {
+            if (StringUtils.isNotEmpty(opts.getKsProvider())) {
+                System.err.println(RES.get("console.pkcs11.ignoredProvider", String.valueOf(opts.getKsType())));
+            }
+            return true;
+        }
+        try {
+            Pkcs11Profiles.getInstance().resolve(opts.getKsProvider(), opts.getKsType());
+            return true;
+        } catch (Pkcs11Exception e) {
+            System.err.println(e.getMessage());
+            return false;
+        }
     }
 
     /**
@@ -88,6 +159,9 @@ public class Signer {
      * @param args
      */
     public static void main(String[] args) {
+        // Settle the UI locale before Constants.RES / the commons-cli option descriptions capture any strings.
+        UiLocale.init(args);
+
         SignerOptionsFromCmdLine tmpOpts = null;
 
         if (args != null && args.length > 0) {
@@ -95,13 +169,17 @@ public class Signer {
             parseCommandLine(args, tmpOpts);
         }
 
+        // Raise the log level to FINE when advanced.properties has debug=true (a no-op under -q, which has
+        // already muted the logger during parsing). Applies to both the CLI and the GUI launched below.
+        AppConfig.applyDebugLogLevel();
+
         try {
             SSLInitializer.init();
         } catch (Exception e) {
             LOGGER.log(Level.WARNING, "Unable to re-configure SSL layer", e);
         }
 
-        PKCS11Utils.registerProviders(ConfigProvider.getInstance().getProperty("pkcs11config.path"));
+        PKCS11Utils.discoverProfiles();
 
         traceInfo();
         boolean showGui = true;
@@ -123,8 +201,24 @@ public class Signer {
                 }
                 return;
             }
+            if (tmpOpts.isListKeyStoreProviders()) {
+                listKeyStoreProviders();
+                exit(0);
+                return;
+            }
             if (tmpOpts.isListKeys()) {
-                final String[] tmpKeyAliases = KeyStoreUtils.getKeyAliases(tmpOpts);
+                if (!checkPkcs11Selection(tmpOpts)) {
+                    exit(EXIT_CODE_COMMON_ERROR);
+                    return;
+                }
+                final String[] tmpKeyAliases;
+                try {
+                    tmpKeyAliases = KeyStoreUtils.getKeyAliases(tmpOpts);
+                } catch (Pkcs11Exception e) {
+                    System.err.println(e.getMessage());
+                    exit(EXIT_CODE_COMMON_ERROR);
+                    return;
+                }
                 LOGGER.info(RES.get("console.keys"));
                 // list certificate aliases in the keystore
                 for (String tmpCert : tmpKeyAliases) {
@@ -132,15 +226,35 @@ public class Signer {
                 }
                 return;
             }
+            if (tmpOpts.isListEngines()) {
+                listEngines();
+                return;
+            }
+            if (tmpOpts.isListSigFields()) {
+                // Unlike the other listing commands this one needs an input PDF, so it is handled after the
+                // input files have been collected.
+                if (ArrayUtils.isEmpty(tmpOpts.getFiles()) && StringUtils.isEmpty(tmpOpts.getInFile())) {
+                    printHelp();
+                    exit(EXIT_CODE_NO_COMMAND);
+                    return;
+                }
+                exit(listSigFields(tmpOpts));
+                return;
+            }
             if (tmpOpts.isGui()) {
                 showGui = true;
             } else if (ArrayUtils.isNotEmpty(tmpOpts.getFiles())
                     || (!StringUtils.isEmpty(tmpOpts.getInFile()) && !StringUtils.isEmpty(tmpOpts.getOutFile()))) {
+                if (!checkPkcs11Selection(tmpOpts)) {
+                    exit(EXIT_CODE_COMMON_ERROR);
+                    return;
+                }
                 signFiles(tmpOpts);
                 exit(0);
             } else {
                 final boolean tmpCommand = tmpOpts.isPrintVersion() || tmpOpts.isPrintHelp() || tmpOpts.isListKeyStores()
-                        || tmpOpts.isListKeys();
+                        || tmpOpts.isListKeys() || tmpOpts.isListEngines() || tmpOpts.isListSigFields()
+                        || tmpOpts.isListKeyStoreProviders();
                 if (!tmpCommand) {
                     // no valid command provided - print help and exit
                     printHelp();
@@ -151,16 +265,66 @@ public class Signer {
         }
 
         if (showGui) {
-            try {
-                UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-            } catch (Exception e) {
-                System.err.println("Can't set Look&Feel.");
-            }
-            SignPdfForm tmpForm = new SignPdfForm(WindowConstants.EXIT_ON_CLOSE, tmpOpts);
-            tmpForm.pack();
-            GuiUtils.center(tmpForm);
-            tmpForm.setVisible(true);
+            launchGui(tmpOpts);
         }
+    }
+
+    /**
+     * Starts the GUI. The JavaFX UI is the default; if its initialization fails (e.g. because of missing/incompatible
+     * native libraries) a warning dialog is shown and the legacy Swing UI is started as a fallback.
+     *
+     * <p>The {@code -Djsignpdf.swing=true} system property forces the legacy Swing UI without attempting JavaFX.
+     */
+    static void launchGui(BasicSignerOptions opts) {
+        if (Boolean.getBoolean("jsignpdf.swing")) {
+            swingLauncher.accept(opts);
+            return;
+        }
+        try {
+            fxLauncher.accept(opts);
+        } catch (Throwable t) {
+            LOGGER.log(Level.WARNING, "JavaFX UI failed to initialize, falling back to Swing UI", t);
+            try {
+                fxFallbackNotifier.accept(t);
+            } catch (Throwable ignored) {
+                // Don't block the Swing fallback if the warning dialog itself can't be shown (e.g. headless).
+            }
+            swingLauncher.accept(opts);
+        }
+    }
+
+    static String buildFxFallbackMessage(Throwable cause) {
+        String reason;
+        if (cause == null) {
+            reason = "";
+        } else if (cause.getMessage() != null && !cause.getMessage().isEmpty()) {
+            reason = cause.getClass().getSimpleName() + ": " + cause.getMessage();
+        } else {
+            reason = cause.getClass().getName();
+        }
+        return RES.get("gui.fxFallback.message", new String[] { reason, GITHUB_ISSUES_URL });
+    }
+
+    private static void showFxFallbackWarning(Throwable cause) {
+        try {
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+        } catch (Exception ignored) {
+            // Fall back to default L&F if system L&F can't be set.
+        }
+        JOptionPane.showMessageDialog(null, buildFxFallbackMessage(cause),
+                RES.get("gui.fxFallback.title"), JOptionPane.WARNING_MESSAGE);
+    }
+
+    private static void doLaunchSwing(BasicSignerOptions opts) {
+        try {
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+        } catch (Exception e) {
+            System.err.println("Can't set Look&Feel.");
+        }
+        SignPdfForm tmpForm = new SignPdfForm(WindowConstants.EXIT_ON_CLOSE, opts);
+        tmpForm.pack();
+        GuiUtils.center(tmpForm);
+        tmpForm.setVisible(true);
     }
 
     /**
@@ -202,7 +366,7 @@ public class Signer {
         final SignerLogic tmpLogic = new SignerLogic(anOpts);
         if (ArrayUtils.isEmpty(anOpts.getFiles())) {
             // we've used -lp (loadproperties) parameter
-            if (!tmpLogic.signFile()) {
+            if (!tmpLogic.execute()) {
                 exit(Constants.EXIT_CODE_ALL_SIG_FAILED);
             }
             return;
@@ -210,50 +374,108 @@ public class Signer {
         int successCount = 0;
         int failedCount = 0;
 
-        for (final String wildcardPath : anOpts.getFiles()) {
-            final File wildcardFile = new File(wildcardPath);
-
-            File[] inputFiles;
-            if (StringUtils.containsAny(wildcardFile.getName(), '*', '?')) {
-                final File inputFolder = wildcardFile.getAbsoluteFile().getParentFile();
-                final FileFilter fileFilter = new AndFileFilter(FileFileFilter.FILE,
-                        new WildcardFileFilter(wildcardFile.getName()));
-                inputFiles = inputFolder.listFiles(fileFilter);
-                if (inputFiles == null) {
-                    continue;
-                }
-            } else {
-                inputFiles = new File[] { wildcardFile };
+        for (File inputFile : expandInputFiles(anOpts.getFiles())) {
+            final String tmpInFile = inputFile.getPath();
+            if (!inputFile.canRead()) {
+                failedCount++;
+                System.err.println(RES.get("file.notReadable", new String[] { tmpInFile }));
+                continue;
             }
-            for (File inputFile : inputFiles) {
-                final String tmpInFile = inputFile.getPath();
-                if (!inputFile.canRead()) {
-                    failedCount++;
-                    System.err.println(RES.get("file.notReadable", new String[] { tmpInFile }));
-                    continue;
-                }
-                anOpts.setInFile(tmpInFile);
-                String tmpNameBase = inputFile.getName();
-                String tmpSuffix = ".pdf";
-                if (StringUtils.endsWithIgnoreCase(tmpNameBase, tmpSuffix)) {
-                    tmpSuffix = StringUtils.right(tmpNameBase, 4);
-                    tmpNameBase = StringUtils.left(tmpNameBase, tmpNameBase.length() - 4);
-                }
-                final StringBuilder tmpName = new StringBuilder(anOpts.getOutPath());
-                tmpName.append(anOpts.getOutPrefix());
-                tmpName.append(tmpNameBase).append(anOpts.getOutSuffix()).append(tmpSuffix);
-                anOpts.setOutFile(tmpName.toString());
-                if (tmpLogic.signFile()) {
-                    successCount++;
-                } else {
-                    failedCount++;
-                }
-
+            anOpts.setInFile(tmpInFile);
+            anOpts.setOutFile(BasicSignerOptions.composeOutFileName(
+                    anOpts.getOutPath(), anOpts.getOutPrefix(), inputFile.getName(), anOpts.getOutSuffixX()));
+            if (tmpLogic.execute()) {
+                successCount++;
+            } else {
+                failedCount++;
             }
         }
         if (failedCount > 0) {
             exit(successCount > 0 ? Constants.EXIT_CODE_SOME_SIG_FAILED : Constants.EXIT_CODE_ALL_SIG_FAILED);
         }
+    }
+
+    /**
+     * Expands the input file arguments - a path with {@code *} or {@code ?} in its name is matched against its
+     * folder, everything else is taken as-is.
+     */
+    private static List<File> expandInputFiles(String[] wildcardPaths) {
+        final List<File> result = new ArrayList<>();
+        for (final String wildcardPath : wildcardPaths) {
+            final File wildcardFile = new File(wildcardPath);
+            if (StringUtils.containsAny(wildcardFile.getName(), '*', '?')) {
+                final File inputFolder = wildcardFile.getAbsoluteFile().getParentFile();
+                final FileFilter fileFilter = new AndFileFilter(FileFileFilter.FILE,
+                        new WildcardFileFilter(wildcardFile.getName()));
+                final File[] inputFiles = inputFolder.listFiles(fileFilter);
+                if (inputFiles == null) {
+                    continue;
+                }
+                Collections.addAll(result, inputFiles);
+            } else {
+                result.add(wildcardFile);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Prints the signature fields of every input PDF: number, name, page, rectangle and state. The numbers are
+     * the ones {@code --sig-field #N} accepts.
+     *
+     * @return the exit code - {@link Constants#EXIT_CODE_CANT_READ_FILE} when a file couldn't be read
+     */
+    private static int listSigFields(SignerOptionsFromCmdLine anOpts) {
+        final List<File> inputFiles = ArrayUtils.isEmpty(anOpts.getFiles())
+                ? List.of(new File(anOpts.getInFile()))
+                : expandInputFiles(anOpts.getFiles());
+        int failedCount = 0;
+        for (File inputFile : inputFiles) {
+            anOpts.setInFile(inputFile.getPath());
+            try {
+                final List<SignatureFieldInfo> fields = new PdfExtraInfo(anOpts).getSignatureFields();
+                if (fields.isEmpty()) {
+                    System.out.println(RES.get("console.sigFields.none", inputFile.getPath()));
+                    continue;
+                }
+                System.out.println(RES.get("console.sigFields", inputFile.getPath()));
+                for (SignatureFieldInfo field : fields) {
+                    System.out.println(formatSigField(field));
+                }
+            } catch (Exception e) {
+                failedCount++;
+                System.err.println(RES.get("console.sigField.cantReadFields", inputFile.getPath(),
+                        StringUtils.defaultString(e.getMessage(), e.getClass().getName())));
+            }
+        }
+        return failedCount > 0 ? Constants.EXIT_CODE_CANT_READ_FILE : 0;
+    }
+
+    private static String formatSigField(SignatureFieldInfo field) {
+        final StringBuilder sb = new StringBuilder();
+        // Locale.ROOT: the numbers are PDF coordinates and a field number to be typed back into --sig-field,
+        // not prose - a locale-dependent decimal comma would only make them harder to read.
+        sb.append(String.format(Locale.ROOT, "%s%-3d %-30s page %-4d [%.1f %.1f %.1f %.1f] %s",
+                Constants.SIG_FIELD_SELECTOR_NUMBER_PREFIX, field.number(), field.name(), field.page(), field.llx(),
+                field.lly(), field.urx(), field.ury(),
+                RES.get(field.signed() ? "console.sigField.state.signed" : "console.sigField.state.blank")));
+        if (field.hidden()) {
+            sb.append(", ").append(RES.get("console.sigField.state.hidden"));
+        }
+        if (shadowsSelector(field.name())) {
+            sb.append(' ').append(RES.get("console.sigField.shadowsSelector"));
+        }
+        return sb.toString();
+    }
+
+    /**
+     * A field whose name is literally {@code auto} or {@code #N} shadows the selector of the same spelling - an
+     * exact name match wins, so the selector can't be used to mean anything else in this document.
+     */
+    private static boolean shadowsSelector(String fieldName) {
+        return Constants.SIG_FIELD_SELECTOR_AUTO.equals(fieldName)
+                || (fieldName.startsWith(Constants.SIG_FIELD_SELECTOR_NUMBER_PREFIX)
+                        && StringUtils.isNumeric(fieldName.substring(1)) && fieldName.length() > 1);
     }
 
     /**

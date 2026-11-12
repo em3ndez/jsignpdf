@@ -1,0 +1,1656 @@
+package net.sf.jsignpdf;
+
+import java.net.InetSocketAddress;
+import java.net.Proxy;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.Objects;
+
+import net.sf.jsignpdf.types.CertificationLevel;
+import net.sf.jsignpdf.types.HashAlgorithm;
+import net.sf.jsignpdf.types.PadesLevel;
+import net.sf.jsignpdf.types.PDFEncryption;
+import net.sf.jsignpdf.types.PrintRight;
+import net.sf.jsignpdf.types.RenderMode;
+import net.sf.jsignpdf.types.ServerAuthentication;
+import net.sf.jsignpdf.utils.AppConfig;
+import net.sf.jsignpdf.utils.PropertyProvider;
+import net.sf.jsignpdf.utils.PropertyStoreFactory;
+
+import org.apache.commons.lang3.StringUtils;
+import org.bouncycastle.crypto.CryptoException;
+
+/**
+ * Options for PDF signer.
+ */
+public class BasicSignerOptions {
+
+    protected final PropertyProvider props = PropertyStoreFactory.getInstance().mainConfig();
+    protected final JSignEncryptor encryptor = new JSignEncryptor();
+
+    private String propertiesFilePath;
+
+    private String ksType;
+    private String ksProvider;
+    private String ksFile;
+    private char[] ksPasswd;
+    private String keyAlias;
+    private int keyIndex = Constants.DEFVAL_KEY_INDEX;
+    private char[] keyPasswd;
+    private String inFile;
+    private String outFile;
+    private String outSuffix;
+    private boolean timestampOnly;
+    private String outPath;
+    private String outPrefix;
+    private String signerName;
+    private String reason;
+    private String location;
+    private String contact;
+    private SignResultListener listener;
+    private boolean append = Constants.DEFVAL_APPEND;
+    private boolean advanced;
+    private PDFEncryption pdfEncryption;
+    private char[] pdfOwnerPwd;
+    private char[] pdfUserPwd;
+    private String pdfEncryptionCertFile;
+    private CertificationLevel certLevel;
+    private HashAlgorithm hashAlgorithm;
+    // PAdES baseline level (DSS engine). null = engine default (OpenPDF ignores it; DSS treats null as BASELINE_B).
+    private PadesLevel padesLevel;
+
+    protected boolean storePasswords = Constants.DEFVAL_STOREPWD;
+
+    // options from rights dialog
+    private PrintRight rightPrinting;
+    private boolean rightCopy;
+    private boolean rightAssembly;
+    private boolean rightFillIn;
+    private boolean rightScreanReaders;
+    private boolean rightModifyAnnotations;
+    private boolean rightModifyContents;
+
+    // options from visible signature settings dialog
+    private boolean visible;
+    private int page = Constants.DEFVAL_PAGE;
+    private float positionLLX = Constants.DEFVAL_LLX;
+    private float positionLLY = Constants.DEFVAL_LLY;
+    private float positionURX = Constants.DEFVAL_URX;
+    private float positionURY = Constants.DEFVAL_URY;
+    private float bgImgScale = Constants.DEFVAL_BG_SCALE;
+    private RenderMode renderMode;
+    private String l2Text;
+    private String l4Text;
+    private float l2TextFontSize = Constants.DEFVAL_L2_FONT_SIZE;
+    private String imgPath;
+    private String bgImgPath;
+    private boolean acro6Layers = Constants.DEFVAL_ACRO6LAYERS;
+    // Existing (empty) signature field to sign into. null = create a new field. This holds what the user
+    // configured, which may be a "#N" / "auto" selector; the name resolved against the current input file is
+    // kept separately so a batch run re-resolves the selector for every file.
+    private String sigFieldName = Constants.DEFVAL_SIG_FIELD;
+    private String resolvedSigFieldName;
+
+    // options for timestamps (provided by external TSA)
+    private boolean timestamp;
+    private String tsaUrl;
+    private ServerAuthentication tsaServerAuthn;
+    private String tsaUser;
+    private String tsaPasswd;
+    private String tsaCertFileType;
+    private String tsaCertFile;
+    private String tsaCertFilePwd;
+    private String tsaPolicy;
+    private String tsaHashAlg;
+
+    // options for certificate validation
+    private boolean ocspEnabled;
+    private String ocspServerUrl;
+    private boolean crlEnabled;
+
+    // Proxy connection
+    private Proxy.Type proxyType;
+    private String proxyHost;
+    private int proxyPort;
+
+    private String[] cmdLine;
+
+    // Signing engine id. Transient per-invocation override (set by the CLI --engine flag); not
+    // persisted in config.properties. When null, the dispatcher falls back to the engine selected in
+    // advanced.properties (see AppConfig#defaultEngineId()).
+    private String engine;
+
+    /**
+     * Loads options from PropertyProvider
+     */
+    public void loadOptions() {
+        if (propertiesFilePath != null) {
+            props.loadProperties(propertiesFilePath);
+        }
+        loadFromStore(props, true);
+    }
+
+    /**
+     * Loads the signing-configuration subset of options from a preset store. Session-only state (input/output paths) is
+     * intentionally skipped — the live values stay in place. Passwords are loaded only when the preset was saved with
+     * {@code storePasswords=true} on a machine with a matching {@code user.home}; otherwise the in-memory password fields
+     * are cleared so stale credentials from a previously loaded preset cannot bleed into this one.
+     *
+     * @param store the preset property store to read from
+     */
+    public void loadFromPreset(PropertyProvider store) {
+        loadFromStore(store, false);
+    }
+
+    /**
+     * Common per-field load. When {@code includeAllConfig} is {@code true} the full main configuration is loaded (including
+     * session state); when {@code false} the method loads only the preset subset — session state (input/output paths) is
+     * skipped and password fields are cleared on the preset path unless the preset legitimately carries them for this user.
+     */
+    private void loadFromStore(PropertyProvider store, boolean includeAllConfig) {
+        setKsType(store.getProperty(Constants.PROPERTY_KSTYPE));
+        setKsProvider(store.getProperty(Constants.PROPERTY_KSPROVIDER));
+        setAdvanced(store.getAsBool(Constants.PROPERTY_ADVANCED));
+        setKsFile(store.getProperty(Constants.PROPERTY_KEYSTORE));
+        setKeyAlias(store.getProperty(Constants.PROPERTY_ALIAS));
+        setKeyIndex(store.getAsInt(Constants.PROPERTY_KEY_INDEX, Constants.DEFVAL_KEY_INDEX));
+        if (includeAllConfig) {
+            setInFile(store.getProperty(Constants.PROPERTY_INPDF));
+            setOutFile(store.getProperty(Constants.PROPERTY_OUTPDF));
+        }
+        setOutSuffix(store.getPropNullSensitive(Constants.PROPERTY_OUT_SUFFIX));
+        setOutPath(store.getPropNullSensitive(Constants.PROPERTY_OUT_PATH));
+        setReason(store.getProperty(Constants.PROPERTY_REASON));
+        setLocation(store.getProperty(Constants.PROPERTY_LOCATION));
+        setContact(store.getProperty(Constants.PROPERTY_CONTACT));
+        setAppend(store.getAsBool(Constants.PROPERTY_APPEND, Constants.DEFVAL_APPEND));
+        // backward compatibility
+        setPdfEncryption(store.getProperty(Constants.PROPERTY_PDF_ENCRYPTION));
+        if (pdfEncryption == null && store.getAsBool(Constants.PROPERTY_ENCRYPTED_PDF)) {
+            setPdfEncryption(PDFEncryption.PASSWORD);
+        }
+        setPdfEncryptionCertFile(store.getProperty(Constants.PROPERTY_PDF_ENCRYPTION_CERT_FILE));
+        setCertLevel(store.getProperty(Constants.PROPERTY_CERT_LEVEL));
+        setHashAlgorithm(store.getProperty(Constants.PROPERTY_HASH_ALGORITHM));
+        setPadesLevel(store.getProperty(Constants.PROPERTY_PADES_LEVEL));
+
+        setRightPrinting(store.getProperty(Constants.PROPERTY_RIGHT_PRINT));
+        setRightCopy(store.getAsBool(Constants.PROPERTY_RIGHT_COPY));
+        setRightAssembly(store.getAsBool(Constants.PROPERTY_RIGHT_ASSEMBLY));
+        setRightFillIn(store.getAsBool(Constants.PROPERTY_RIGHT_FILL_IN));
+        setRightScreanReaders(store.getAsBool(Constants.PROPERTY_RIGHT_SCR_READ));
+        setRightModifyAnnotations(store.getAsBool(Constants.PROPERTY_RIGHT_MOD_ANNOT));
+        setRightModifyContents(store.getAsBool(Constants.PROPERTY_RIGHT_MOD_CONT));
+
+        // visible signature options
+        setVisible(store.getAsBool(Constants.PROPERTY_VISIBLE_ENABLED));
+        setPage(store.getAsInt(Constants.PROPERTY_VISIBLE_PAGE, Constants.DEFVAL_PAGE));
+        setPositionLLX(store.getAsFloat(Constants.PROPERTY_VISIBLE_POS_LLX, Constants.DEFVAL_LLX));
+        setPositionLLY(store.getAsFloat(Constants.PROPERTY_VISIBLE_POS_LLY, Constants.DEFVAL_LLY));
+        setPositionURX(store.getAsFloat(Constants.PROPERTY_VISIBLE_POS_URX, Constants.DEFVAL_URX));
+        setPositionURY(store.getAsFloat(Constants.PROPERTY_VISIBLE_POS_URY, Constants.DEFVAL_URY));
+        setBgImgScale(store.getAsFloat(Constants.PROPERTY_VISIBLE_BGSCALE, Constants.DEFVAL_BG_SCALE));
+        setRenderMode(store.getProperty(Constants.PROPERTY_VISIBLE_RENDER));
+        setL2Text(store.getPropNullSensitive(Constants.PROPERTY_VISIBLE_L2TEXT));
+        setL2TextFontSize(store.getAsFloat(Constants.PROPERTY_VISIBLE_L2TEXT_FONT_SIZE, Constants.DEFVAL_L2_FONT_SIZE));
+        setL4Text(store.getPropNullSensitive(Constants.PROPERTY_VISIBLE_L4TEXT));
+        setImgPath(store.getProperty(Constants.PROPERTY_VISIBLE_IMG));
+        setBgImgPath(store.getProperty(Constants.PROPERTY_VISIBLE_BGIMG));
+        setAcro6Layers(!store.exists(Constants.PROPERTY_VISIBLE_ACRO6LAYERS)
+                || store.getAsBool(Constants.PROPERTY_VISIBLE_ACRO6LAYERS));
+        // sigFieldName is intentionally not loaded here - see getSigFieldName().
+
+        // TSA
+        setTimestamp(store.getAsBool(Constants.PROPERTY_TSA_ENABLED));
+        setTsaUrl(store.getProperty(Constants.PROPERTY_TSA_URL));
+        setTsaUser(store.getProperty(Constants.PROPERTY_TSA_USER));
+        // backward compatibility
+        setTsaServerAuthn(store.getProperty(Constants.PROPERTY_TSA_SERVER_AUTHN));
+        if (tsaServerAuthn == null && StringUtils.isNotEmpty(tsaUser)) {
+            setTsaServerAuthn(ServerAuthentication.PASSWORD);
+        }
+        setTsaCertFileType(store.getProperty(Constants.PROPERTY_TSA_CERT_FILE_TYPE));
+        setTsaCertFile(store.getProperty(Constants.PROPERTY_TSA_CERT_FILE));
+        setTsaPolicy(store.getProperty(Constants.PROPERTY_TSA_POLICY));
+        setTsaHashAlg(store.getProperty(Constants.PROPERTY_TSA_HASH_ALG));
+
+        // OCSP & CRL
+        setOcspEnabled(store.getAsBool(Constants.PROPERTY_OCSP_ENABLED));
+        setOcspServerUrl(store.getProperty(Constants.PROPERTY_OCSP_SERVER_URL));
+        setCrlEnabled(store.getAsBool(Constants.PROPERTY_CRL_ENABLED));
+
+        // proxy
+        setProxyType(store.getProperty(Constants.PROPERTY_PROXY_TYPE));
+        setProxyHost(store.getProperty(Constants.PROPERTY_PROXY_HOST));
+        setProxyPort(store.getAsInt(Constants.PROPERTY_PROXY_PORT, Constants.DEFVAL_PROXY_PORT));
+
+        // passwords — gated by storePasswords and a matching user.home
+        storePasswords = store.getAsBool(Constants.PROPERTY_STOREPWD, Constants.DEFVAL_STOREPWD);
+        final String tmpHome = getDecrypted(store, Constants.EPROPERTY_USERHOME);
+        final boolean tmpPasswords = storePasswords && Constants.USER_HOME != null && Constants.USER_HOME.equals(tmpHome);
+        if (tmpPasswords) {
+            setKsPasswd(getDecrypted(store, Constants.EPROPERTY_KS_PWD));
+            setKeyPasswd(getDecrypted(store, Constants.EPROPERTY_KEY_PWD));
+            setPdfOwnerPwd(getDecrypted(store, Constants.EPROPERTY_OWNER_PWD));
+            setPdfUserPwd(getDecrypted(store, Constants.EPROPERTY_USER_PWD));
+            setTsaPasswd(getDecrypted(store, Constants.EPROPERTY_TSA_PWD));
+            setTsaCertFilePwd(getDecrypted(store, Constants.EPROPERTY_TSA_CERT_PWD));
+        } else if (!includeAllConfig) {
+            // Preset load: clear any stale passwords carried over from a previously
+            // loaded preset. Otherwise a user who switches to a password-less or
+            // foreign-host preset would silently sign with the earlier preset's
+            // credentials. The main-config path keeps the in-memory values so an
+            // interactive password entry on a fresh session is still possible.
+            setKsPasswd((String) null);
+            setKeyPasswd((String) null);
+            setPdfOwnerPwd((String) null);
+            setPdfUserPwd((String) null);
+            setTsaPasswd(null);
+            setTsaCertFilePwd(null);
+        }
+    }
+
+    /**
+     * Stores options to PropertyProvider
+     */
+    public void storeOptions() {
+        storeToStore(props, true);
+        if (propertiesFilePath != null) {
+            props.saveProperties(propertiesFilePath);
+        } else {
+            props.save();
+        }
+    }
+
+    /**
+     * Writes the signing-configuration subset of options into a preset store. Session-only state (input/output paths) is
+     * skipped. Passwords are written encrypted when {@code storePasswords} is {@code true}; otherwise the password keys are
+     * removed from the store. The caller is responsible for persisting the store via {@link PropertyProvider#save()}.
+     *
+     * @param store the preset property store to write to
+     */
+    public void storeToPreset(PropertyProvider store) {
+        storeToStore(store, false);
+    }
+
+    /**
+     * Common per-field store. When {@code includeAllConfig} is {@code true} the full main configuration is written (including
+     * session state); when {@code false} the method writes only the preset subset (no session state). Password fields are
+     * written encrypted in either case when {@code storePasswords} is set, and otherwise cleared from the target store.
+     */
+    private void storeToStore(PropertyProvider store, boolean includeAllConfig) {
+        store.setProperty(Constants.PROPERTY_KSTYPE, getKsType());
+        store.setProperty(Constants.PROPERTY_KSPROVIDER, getKsProvider());
+        store.setProperty(Constants.PROPERTY_ADVANCED, isAdvanced());
+        store.setProperty(Constants.PROPERTY_KEYSTORE, getKsFile());
+        store.setProperty(Constants.PROPERTY_ALIAS, getKeyAlias());
+        store.setProperty(Constants.PROPERTY_KEY_INDEX, getKeyIndex());
+        if (includeAllConfig) {
+            store.setProperty(Constants.PROPERTY_INPDF, getInFile());
+            store.setProperty(Constants.PROPERTY_OUTPDF, getOutFile());
+        }
+        store.setPropNullSensitive(Constants.PROPERTY_OUT_SUFFIX, getOutSuffix());
+        store.setPropNullSensitive(Constants.PROPERTY_OUT_PATH, getOutPathRaw());
+        store.setProperty(Constants.PROPERTY_REASON, getReason());
+        store.setProperty(Constants.PROPERTY_LOCATION, getLocation());
+        store.setProperty(Constants.PROPERTY_CONTACT, getContact());
+        store.setProperty(Constants.PROPERTY_APPEND, isAppend());
+        store.setProperty(Constants.PROPERTY_PDF_ENCRYPTION, getPdfEncryption().name());
+        store.setProperty(Constants.PROPERTY_PDF_ENCRYPTION_CERT_FILE, getPdfEncryptionCertFile());
+        store.setProperty(Constants.PROPERTY_CERT_LEVEL, getCertLevel().name());
+        store.setProperty(Constants.PROPERTY_HASH_ALGORITHM, getHashAlgorithm().name());
+        store.setProperty(Constants.PROPERTY_PADES_LEVEL, getPadesLevel() == null ? null : getPadesLevel().name());
+
+        store.setProperty(Constants.PROPERTY_RIGHT_PRINT, getRightPrinting().name());
+        store.setProperty(Constants.PROPERTY_RIGHT_COPY, isRightCopy());
+        store.setProperty(Constants.PROPERTY_RIGHT_ASSEMBLY, isRightAssembly());
+        store.setProperty(Constants.PROPERTY_RIGHT_FILL_IN, isRightFillIn());
+        store.setProperty(Constants.PROPERTY_RIGHT_SCR_READ, isRightScreanReaders());
+        store.setProperty(Constants.PROPERTY_RIGHT_MOD_ANNOT, isRightModifyAnnotations());
+        store.setProperty(Constants.PROPERTY_RIGHT_MOD_CONT, isRightModifyContents());
+
+        // visible signature options
+        store.setProperty(Constants.PROPERTY_VISIBLE_ENABLED, isVisible());
+        store.setProperty(Constants.PROPERTY_VISIBLE_PAGE, getPage());
+        store.setProperty(Constants.PROPERTY_VISIBLE_POS_LLX, getPositionLLX());
+        store.setProperty(Constants.PROPERTY_VISIBLE_POS_LLY, getPositionLLY());
+        store.setProperty(Constants.PROPERTY_VISIBLE_POS_URX, getPositionURX());
+        store.setProperty(Constants.PROPERTY_VISIBLE_POS_URY, getPositionURY());
+        store.setProperty(Constants.PROPERTY_VISIBLE_BGSCALE, getBgImgScale());
+        store.setProperty(Constants.PROPERTY_VISIBLE_RENDER, getRenderMode().name());
+        store.setPropNullSensitive(Constants.PROPERTY_VISIBLE_L2TEXT, getL2Text());
+        store.setProperty(Constants.PROPERTY_VISIBLE_L2TEXT_FONT_SIZE, getL2TextFontSize());
+        store.setPropNullSensitive(Constants.PROPERTY_VISIBLE_L4TEXT, getL4Text());
+        store.setProperty(Constants.PROPERTY_VISIBLE_IMG, getImgPath());
+        store.setProperty(Constants.PROPERTY_VISIBLE_BGIMG, getBgImgPath());
+        store.setProperty(Constants.PROPERTY_VISIBLE_ACRO6LAYERS, isAcro6Layers());
+        // sigFieldName is intentionally not stored here - see getSigFieldName().
+
+        store.setProperty(Constants.PROPERTY_TSA_ENABLED, isTimestamp());
+        store.setProperty(Constants.PROPERTY_TSA_URL, getTsaUrl());
+        store.setProperty(Constants.PROPERTY_TSA_USER, getTsaUser());
+        store.setProperty(Constants.PROPERTY_TSA_CERT_FILE_TYPE, getTsaCertFileType());
+        store.setProperty(Constants.PROPERTY_TSA_CERT_FILE, getTsaCertFile());
+        store.setProperty(Constants.PROPERTY_TSA_SERVER_AUTHN, getTsaServerAuthn().name());
+        store.setProperty(Constants.PROPERTY_TSA_POLICY, getTsaPolicy());
+        store.setProperty(Constants.PROPERTY_TSA_HASH_ALG, getTsaHashAlg());
+        store.setProperty(Constants.PROPERTY_OCSP_ENABLED, isOcspEnabled());
+        store.setProperty(Constants.PROPERTY_OCSP_SERVER_URL, getOcspServerUrl());
+        store.setProperty(Constants.PROPERTY_CRL_ENABLED, isCrlEnabled());
+
+        store.setProperty(Constants.PROPERTY_PROXY_TYPE, getProxyType().name());
+        store.setProperty(Constants.PROPERTY_PROXY_HOST, getProxyHost());
+        store.setProperty(Constants.PROPERTY_PROXY_PORT, getProxyPort());
+
+        store.setProperty(Constants.PROPERTY_STOREPWD, isStorePasswords());
+        setEncrypted(store, Constants.EPROPERTY_USERHOME, Constants.USER_HOME);
+        if (isStorePasswords()) {
+            setEncrypted(store, Constants.EPROPERTY_KS_PWD, getKsPasswdStr());
+            setEncrypted(store, Constants.EPROPERTY_KEY_PWD, getKeyPasswdStr());
+            setEncrypted(store, Constants.EPROPERTY_OWNER_PWD, getPdfOwnerPwdStr());
+            setEncrypted(store, Constants.EPROPERTY_USER_PWD, getPdfUserPwdStr());
+            setEncrypted(store, Constants.EPROPERTY_TSA_PWD, getTsaPasswd());
+            setEncrypted(store, Constants.EPROPERTY_TSA_CERT_PWD, getTsaCertFilePwd());
+        } else {
+            store.removeProperty(Constants.EPROPERTY_KS_PWD);
+            store.removeProperty(Constants.EPROPERTY_KEY_PWD);
+            store.removeProperty(Constants.EPROPERTY_OWNER_PWD);
+            store.removeProperty(Constants.EPROPERTY_USER_PWD);
+            store.removeProperty(Constants.EPROPERTY_TSA_PWD);
+            store.removeProperty(Constants.EPROPERTY_TSA_CERT_PWD);
+        }
+    }
+
+    public void loadCmdLine() throws Exception {
+    }
+
+    /**
+     * Fires event listener
+     *
+     * @param aResult
+     * @see #getListener()
+     */
+    protected void fireSignerFinishedEvent(final Throwable aResult) {
+        if (listener != null) {
+            listener.signerFinishedEvent(aResult);
+        }
+    }
+
+    /**
+     * Converts array of characters to String. If array is null, empty string is returned
+     *
+     * @param aCharArr char array
+     * @return not null string
+     */
+    private String charArrToStr(final char[] aCharArr) {
+        return aCharArr == null ? "" : new String(aCharArr);
+    }
+
+    /**
+     * @return the propertiesFilePath
+     */
+    public String getPropertiesFilePath() {
+        return propertiesFilePath;
+    }
+
+    /**
+     * @param propertiesFilePath the propertiesFilePath to set
+     */
+    public void setPropertiesFilePath(final String propertiesFilePath) {
+        this.propertiesFilePath = propertiesFilePath;
+    }
+
+    public String getKsType() {
+        return ksType;
+    }
+
+    public void setKsType(final String ksType) {
+        this.ksType = ksType;
+    }
+
+    /**
+     * The PKCS#11 profile id used for the {@code PKCS11} / {@code JSIGNPKCS11} keystore types; {@code null} when not set.
+     */
+    public String getKsProvider() {
+        return ksProvider;
+    }
+
+    public void setKsProvider(final String ksProvider) {
+        this.ksProvider = StringUtils.trimToNull(ksProvider);
+    }
+
+    public String getKsFile() {
+        return ksFile;
+    }
+
+    public void setKsFile(final String ksFile) {
+        this.ksFile = ksFile;
+    }
+
+    public char[] getKsPasswd() {
+        return ksPasswd;
+    }
+
+    public String getKsPasswdStr() {
+        return charArrToStr(ksPasswd);
+    }
+
+    public void setKsPasswd(final char[] passwd) {
+        this.ksPasswd = passwd;
+    }
+
+    public void setKsPasswd(final String aPasswd) {
+        setKsPasswd(aPasswd == null ? null : aPasswd.toCharArray());
+    }
+
+    public String getInFile() {
+        return inFile;
+    }
+
+    public void setInFile(final String inFile) {
+        this.inFile = inFile;
+    }
+
+    public String getOutFile() {
+        return outFile;
+    }
+
+    /**
+     * Returns the suffix appended to the input file name when no explicit output file is set. Falls back to the
+     * {@code output.suffix} advanced-config key ({@code output.suffix.timestamp} in {@link #isTimestampOnly()} mode)
+     * and finally to {@link Constants#DEFAULT_OUT_SUFFIX} / {@link Constants#DEFAULT_TIMESTAMP_SUFFIX} when this
+     * instance carries no suffix of its own.
+     *
+     * @return the effective output suffix, never {@code null}
+     */
+    public String getOutSuffixX() {
+        if (outSuffix != null) {
+            return outSuffix;
+        }
+        return timestampOnly ? AppConfig.defaultTimestampSuffix() : AppConfig.defaultOutSuffix();
+    }
+
+    /**
+     * Returns the suffix set on this instance, or {@code null} when none is set and the configured default applies.
+     *
+     * @return the suffix or {@code null}
+     */
+    public String getOutSuffix() {
+        return outSuffix;
+    }
+
+    public void setOutSuffix(final String outSuffix) {
+        this.outSuffix = outSuffix;
+    }
+
+    /**
+     * Returns whether this run appends a document timestamp instead of signing. It is an action rather than a
+     * setting, so it is intentionally not part of {@code loadFromStore} / {@code storeToStore}.
+     *
+     * @return true when only a document timestamp is appended
+     */
+    public boolean isTimestampOnly() {
+        return timestampOnly;
+    }
+
+    public void setTimestampOnly(final boolean timestampOnly) {
+        this.timestampOnly = timestampOnly;
+    }
+
+    /**
+     * Returns output file name if filled or the name composed from the input file, the output directory
+     * ({@code -op}), the prefix ({@code -opre}) and the effective output suffix.
+     *
+     * @return
+     */
+    public String getOutFileX() {
+        String tmpOut = StringUtils.defaultIfBlank(outFile, null);
+        return tmpOut != null ? tmpOut : composeOutFileName(outPath, outPrefix, getInFile(), getOutSuffixX());
+    }
+
+    /**
+     * Derives the output file name from an input file name and a suffix, next to the input. A {@code null} suffix
+     * falls back to the configured {@code output.suffix}; a {@code null} or blank input name yields {@code "signed.pdf"}.
+     *
+     * @param inFileName the input file name or path
+     * @param outSuffix the suffix to append, or {@code null} for the configured default
+     * @return the derived output file name
+     */
+    public static String deriveOutFileName(final String inFileName, final String outSuffix) {
+        return composeOutFileName(null, null, inFileName, outSuffix);
+    }
+
+    /**
+     * Single rule for composing an output file name, shared by {@link #getOutFileX()} and the batch loop in
+     * {@code Signer}. With a blank {@code outPath} the name is derived next to the input (its own directory kept,
+     * the prefix ignored); with a non-blank {@code outPath} the input is reduced to its base name and placed under
+     * that directory with the prefix. A {@code null} suffix falls back to the configured {@code output.suffix};
+     * a {@code null} or blank input name yields {@code "signed.pdf"}.
+     *
+     * @param outPath the output directory, or {@code null}/blank to derive next to the input
+     * @param outPrefix the prefix prepended to the base name in directory mode, or {@code null} for none
+     * @param inFileName the input file name or path
+     * @param outSuffix the suffix to append, or {@code null} for the configured default
+     * @return the composed output file name
+     */
+    public static String composeOutFileName(final String outPath, final String outPrefix,
+            final String inFileName, final String outSuffix) {
+        String tmpNameBase = StringUtils.defaultIfBlank(inFileName, null);
+        if (tmpNameBase == null) {
+            return "signed.pdf";
+        }
+        final String suffix = outSuffix != null ? outSuffix : AppConfig.defaultOutSuffix();
+        String tmpExtension = "";
+        if (tmpNameBase.toLowerCase().endsWith(".pdf")) {
+            final int tmpBaseLen = tmpNameBase.length() - 4;
+            tmpExtension = tmpNameBase.substring(tmpBaseLen);
+            tmpNameBase = tmpNameBase.substring(0, tmpBaseLen);
+        }
+        if (StringUtils.isEmpty(outPath)) {
+            return tmpNameBase + suffix + tmpExtension;
+        }
+        tmpNameBase = tmpNameBase.replace('\\', '/');
+        final int slash = tmpNameBase.lastIndexOf('/');
+        if (slash >= 0) {
+            tmpNameBase = tmpNameBase.substring(slash + 1);
+        }
+        return normalizeOutPath(outPath) + StringUtils.defaultString(outPrefix) + tmpNameBase + suffix + tmpExtension;
+    }
+
+    private static String normalizeOutPath(final String outPath) {
+        String tmpResult = outPath.replace('\\', '/');
+        return tmpResult.endsWith("/") ? tmpResult : tmpResult + "/";
+    }
+
+    /**
+     * Returns the output directory ({@code -op}) including a trailing slash, or {@code "./"} when unset.
+     *
+     * @return the outPath
+     */
+    public String getOutPath() {
+        return StringUtils.isEmpty(outPath) ? "./" : normalizeOutPath(outPath);
+    }
+
+    /**
+     * Returns the raw output directory as set, or {@code null}/blank when unset. Unlike {@link #getOutPath()} this does
+     * not normalize or default to {@code "./"} — the UI and presets need the value verbatim to tell "unset" apart.
+     *
+     * @return the raw outPath
+     */
+    public String getOutPathRaw() {
+        return outPath;
+    }
+
+    public void setOutPath(final String outPath) {
+        this.outPath = outPath;
+    }
+
+    /**
+     * Returns the output name prefix ({@code -opre}), never {@code null}.
+     *
+     * @return the outPrefix
+     */
+    public String getOutPrefix() {
+        return StringUtils.defaultString(outPrefix);
+    }
+
+    public void setOutPrefix(final String outPrefix) {
+        this.outPrefix = outPrefix;
+    }
+
+    public void setOutFile(final String outFile) {
+        this.outFile = outFile;
+    }
+
+    public String getSignerName() {
+        return signerName;
+    }
+
+    public void setSignerName(final String signerName) {
+        this.signerName = signerName;
+    }
+
+    public String getReason() {
+        return reason;
+    }
+
+    public void setReason(final String reason) {
+        this.reason = reason;
+    }
+
+    public String getLocation() {
+        return location;
+    }
+
+    public void setLocation(final String location) {
+        this.location = location;
+    }
+
+    public SignResultListener getListener() {
+        return listener;
+    }
+
+    public void setListener(final SignResultListener listener) {
+        this.listener = listener;
+    }
+
+    public char[] getKeyPasswd() {
+        return keyPasswd;
+    }
+
+    public char[] getKeyPasswdX() {
+        if (keyPasswd != null && keyPasswd.length == 0) {
+            keyPasswd = null;
+        }
+        return (advanced && keyPasswd != null) ? keyPasswd : ksPasswd;
+    }
+
+    public String getKeyPasswdStr() {
+        return charArrToStr(keyPasswd);
+    }
+
+    public void setKeyPasswd(final char[] keyPasswd) {
+        this.keyPasswd = keyPasswd;
+    }
+
+    public void setKeyPasswd(final String aPasswd) {
+        setKeyPasswd(aPasswd == null ? null : aPasswd.toCharArray());
+    }
+
+    public String getKeyAlias() {
+        return keyAlias;
+    }
+
+    public String getKeyAliasX() {
+        return advanced ? keyAlias : null;
+    }
+
+    public void setKeyAlias(final String keyAlias) {
+        this.keyAlias = keyAlias;
+    }
+
+    public int getKeyIndex() {
+        return keyIndex;
+    }
+
+    public int getKeyIndexX() {
+        return advanced ? keyIndex : Constants.DEFVAL_KEY_INDEX;
+    }
+
+    public void setKeyIndex(final int anIndex) {
+        this.keyIndex = anIndex;
+        if (keyIndex < 0)
+            keyIndex = Constants.DEFVAL_KEY_INDEX;
+    }
+
+    public boolean isAppend() {
+        return append;
+    }
+
+    public boolean isAppendX() {
+        return (getPdfEncryption() == PDFEncryption.NONE)
+                && ((!Constants.DEFVAL_APPEND && advanced && append) || (Constants.DEFVAL_APPEND && (append || !advanced)));
+    }
+
+    public void setAppend(final boolean append) {
+        this.append = append;
+    }
+
+    public boolean isAdvanced() {
+        return advanced;
+    }
+
+    public void setAdvanced(final boolean advanced) {
+        this.advanced = advanced;
+    }
+
+    /**
+     * @return the pdfEncryption
+     */
+    public PDFEncryption getPdfEncryption() {
+        if (pdfEncryption == null) {
+            pdfEncryption = PDFEncryption.NONE;
+        }
+        return pdfEncryption;
+    }
+
+    /**
+     * @param pdfEncryption the pdfEncryption to set
+     */
+    public void setPdfEncryption(final PDFEncryption pdfEncryption) {
+        this.pdfEncryption = pdfEncryption;
+    }
+
+    public void setPdfEncryption(final String aValue) {
+        PDFEncryption enumInstance = null;
+        if (aValue != null) {
+            try {
+                enumInstance = PDFEncryption.valueOf(aValue.toUpperCase(Locale.ENGLISH));
+            } catch (final Exception e) {
+                // probably illegal value - fallback to a default (i.e. null)
+            }
+        }
+        setPdfEncryption(enumInstance);
+    }
+
+    public char[] getPdfOwnerPwd() {
+        return pdfOwnerPwd;
+    }
+
+    public String getPdfOwnerPwdStr() {
+        return charArrToStr(pdfOwnerPwd);
+    }
+
+    public String getPdfOwnerPwdStrX() {
+        return charArrToStr(advanced ? pdfOwnerPwd : null);
+    }
+
+    public void setPdfOwnerPwd(final char[] pdfOwnerPwd) {
+        this.pdfOwnerPwd = pdfOwnerPwd;
+    }
+
+    /**
+     * @return the pdfEncryptionCertFile
+     */
+    public String getPdfEncryptionCertFile() {
+        return pdfEncryptionCertFile;
+    }
+
+    /**
+     * @param pdfEncryptionCertFile the pdfEncryptionCertFile to set
+     */
+    public void setPdfEncryptionCertFile(final String pdfEncryptionCertFile) {
+        this.pdfEncryptionCertFile = pdfEncryptionCertFile;
+    }
+
+    public void setPdfOwnerPwd(final String aPasswd) {
+        setPdfOwnerPwd(aPasswd == null ? null : aPasswd.toCharArray());
+    }
+
+    public char[] getPdfUserPwd() {
+        return pdfUserPwd;
+    }
+
+    public String getPdfUserPwdStr() {
+        return charArrToStr(pdfUserPwd);
+    }
+
+    public void setPdfUserPwd(final char[] pdfUserPwd) {
+        this.pdfUserPwd = pdfUserPwd;
+    }
+
+    public void setPdfUserPwd(final String aPasswd) {
+        setPdfUserPwd(aPasswd == null ? null : aPasswd.toCharArray());
+    }
+
+    public CertificationLevel getCertLevel() {
+        if (certLevel == null) {
+            certLevel = CertificationLevel.NOT_CERTIFIED;
+        }
+        return certLevel;
+    }
+
+    public CertificationLevel getCertLevelX() {
+        return advanced ? getCertLevel() : CertificationLevel.NOT_CERTIFIED;
+    }
+
+    public void setCertLevel(final CertificationLevel aCertLevel) {
+        this.certLevel = aCertLevel;
+    }
+
+    public void setCertLevel(final String aValue) {
+        CertificationLevel certLevel = null;
+        if (aValue != null) {
+            try {
+                certLevel = CertificationLevel.valueOf(aValue.toUpperCase(Locale.ENGLISH));
+            } catch (final Exception e) {
+                // probably illegal value - fallback to a default (i.e. null)
+            }
+        }
+        setCertLevel(certLevel);
+    }
+
+    public boolean isRightCopy() {
+        return rightCopy;
+    }
+
+    public void setRightCopy(final boolean rightCopy) {
+        this.rightCopy = rightCopy;
+    }
+
+    public boolean isRightAssembly() {
+        return rightAssembly;
+    }
+
+    public void setRightAssembly(final boolean rightAssembly) {
+        this.rightAssembly = rightAssembly;
+    }
+
+    public boolean isRightFillIn() {
+        return rightFillIn;
+    }
+
+    public void setRightFillIn(final boolean rightFillIn) {
+        this.rightFillIn = rightFillIn;
+    }
+
+    public boolean isRightScreanReaders() {
+        return rightScreanReaders;
+    }
+
+    public void setRightScreanReaders(final boolean rightScreanReaders) {
+        this.rightScreanReaders = rightScreanReaders;
+    }
+
+    public boolean isRightModifyAnnotations() {
+        return rightModifyAnnotations;
+    }
+
+    public void setRightModifyAnnotations(final boolean rightModifyAnnotations) {
+        this.rightModifyAnnotations = rightModifyAnnotations;
+    }
+
+    public boolean isRightModifyContents() {
+        return rightModifyContents;
+    }
+
+    public void setRightModifyContents(final boolean rightModifyContents) {
+        this.rightModifyContents = rightModifyContents;
+    }
+
+    public PrintRight getRightPrinting() {
+        if (rightPrinting == null) {
+            rightPrinting = PrintRight.ALLOW_PRINTING;
+        }
+        return rightPrinting;
+    }
+
+    public void setRightPrinting(PrintRight rightPrinting) {
+        this.rightPrinting = rightPrinting;
+    }
+
+    public void setRightPrinting(final String aValue) {
+        PrintRight printRight = null;
+        if (aValue != null) {
+            try {
+                printRight = PrintRight.valueOf(aValue.toUpperCase(Locale.ENGLISH));
+            } catch (final Exception e) {
+                // probably illegal value - fallback to a default (i.e. null)
+            }
+        }
+        setRightPrinting(printRight);
+    }
+
+    public boolean isVisible() {
+        return visible;
+    }
+
+    public void setVisible(final boolean visible) {
+        this.visible = visible;
+    }
+
+    public int getPage() {
+        return page;
+    }
+
+    public void setPage(int aPage) {
+        this.page = aPage;
+    }
+
+    public float getPositionLLX() {
+        return positionLLX;
+    }
+
+    public void setPositionLLX(final float positionLLX) {
+        this.positionLLX = positionLLX;
+    }
+
+    public float getPositionLLY() {
+        return positionLLY;
+    }
+
+    public void setPositionLLY(final float positionLLY) {
+        this.positionLLY = positionLLY;
+    }
+
+    public float getPositionURX() {
+        return positionURX;
+    }
+
+    public void setPositionURX(final float positionURX) {
+        this.positionURX = positionURX;
+    }
+
+    public float getPositionURY() {
+        return positionURY;
+    }
+
+    public void setPositionURY(final float positionURY) {
+        this.positionURY = positionURY;
+    }
+
+    public float getBgImgScale() {
+        return bgImgScale;
+    }
+
+    public void setBgImgScale(final float bgImgScale) {
+        this.bgImgScale = bgImgScale;
+    }
+
+    public RenderMode getRenderMode() {
+        if (renderMode == null) {
+            renderMode = RenderMode.DESCRIPTION_ONLY;
+        }
+        return renderMode;
+    }
+
+    public void setRenderMode(final RenderMode renderMode) {
+        this.renderMode = renderMode;
+    }
+
+    public void setRenderMode(final String aValue) {
+        RenderMode renderMode = null;
+        if (aValue != null) {
+            try {
+                renderMode = RenderMode.valueOf(aValue.toUpperCase(Locale.ENGLISH));
+            } catch (final Exception e) {
+                // probably illegal value - fallback to default (i.e. null)
+            }
+        }
+        setRenderMode(renderMode);
+    }
+
+    public String getL2Text() {
+        return l2Text;
+    }
+
+    public void setL2Text(final String text) {
+        l2Text = text;
+    }
+
+    public String getL4Text() {
+        return l4Text;
+    }
+
+    public void setL4Text(final String text) {
+        l4Text = text;
+    }
+
+    public String getImgPath() {
+        return (imgPath = StringUtils.defaultIfBlank(imgPath, null));
+    }
+
+    public void setImgPath(final String imgPath) {
+        this.imgPath = imgPath;
+    }
+
+    public String getBgImgPath() {
+        return (bgImgPath = StringUtils.defaultIfBlank(bgImgPath, null));
+    }
+
+    public void setBgImgPath(final String bgImgPath) {
+        this.bgImgPath = bgImgPath;
+    }
+
+    /**
+     * @return the l2TextFontSize
+     */
+    public float getL2TextFontSize() {
+        if (l2TextFontSize <= 0f) {
+            l2TextFontSize = Constants.DEFVAL_L2_FONT_SIZE;
+        }
+        return l2TextFontSize;
+    }
+
+    /**
+     * @param textFontSize the l2TextFontSize to set
+     */
+    public void setL2TextFontSize(final float textFontSize) {
+        l2TextFontSize = textFontSize;
+    }
+
+    /**
+     * @return the acro6Layers
+     */
+    public boolean isAcro6Layers() {
+        return acro6Layers;
+    }
+
+    /**
+     * @param acro6Layers the acro6Layers to set
+     */
+    public void setAcro6Layers(final boolean acro6Layers) {
+        this.acro6Layers = acro6Layers;
+    }
+
+    /**
+     * The configured existing signature field to sign into, or {@code null} when a new field should be created.
+     * This is what the user set - it may be a {@code #N} or {@code auto} selector rather than a field name.
+     * Engines must use {@link #getSigFieldNameX()} instead.
+     *
+     * <p>Like the input and output paths, this is session state and is deliberately not written to the
+     * properties store or to presets: a field name means something only for the document it was chosen from,
+     * so a remembered one would either hard-fail on the next document or, worse, hit a same-named field
+     * somewhere else in it.
+     *
+     * @return the configured signature field selector or {@code null}
+     */
+    public String getSigFieldName() {
+        return sigFieldName;
+    }
+
+    /**
+     * @param sigFieldName the signature field name or selector to set (empty value is normalized to {@code null})
+     */
+    public void setSigFieldName(final String sigFieldName) {
+        this.sigFieldName = StringUtils.isEmpty(sigFieldName) ? null : sigFieldName;
+    }
+
+    /**
+     * Records the field name the configured selector resolved to for the file being signed. Set per input file,
+     * so that a selector stays a selector across the files of a batch run.
+     *
+     * @param resolvedSigFieldName the resolved field name, or {@code null} to drop a previous resolution
+     */
+    public void setResolvedSigFieldName(final String resolvedSigFieldName) {
+        this.resolvedSigFieldName = StringUtils.isEmpty(resolvedSigFieldName) ? null : resolvedSigFieldName;
+    }
+
+    /**
+     * The name of the existing signature field to sign into - the resolved one when a selector was resolved for
+     * this file, the configured value otherwise. This is what engines pass to
+     * {@code PdfSignatureAppearance.setVisibleSignature(String)} / {@code SignatureFieldParameters.setFieldId}.
+     *
+     * @return the signature field name or {@code null} when a new field should be created
+     */
+    public String getSigFieldNameX() {
+        return resolvedSigFieldName != null ? resolvedSigFieldName : sigFieldName;
+    }
+
+    /**
+     * Returns true when the signature goes into an existing signature field.
+     */
+    public boolean isSigFieldSet() {
+        return getSigFieldNameX() != null;
+    }
+
+    /**
+     * Returns decrypted property from the backing main-config store.
+     */
+    protected String getDecrypted(final String aProperty) {
+        return getDecrypted(props, aProperty);
+    }
+
+    /**
+     * Returns decrypted property from the given store.
+     */
+    protected String getDecrypted(final PropertyProvider store, final String aProperty) {
+        try {
+            return encryptor.decryptString(store.getProperty(aProperty));
+        } catch (final CryptoException e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    /**
+     * Sets encrypted property on the backing main-config store.
+     */
+    protected void setEncrypted(final String aProperty, final String aValue) {
+        setEncrypted(props, aProperty, aValue);
+    }
+
+    /**
+     * Sets encrypted property on the given store.
+     */
+    protected void setEncrypted(final PropertyProvider store, final String aProperty, final String aValue) {
+        try {
+            store.setProperty(aProperty, encryptor.encryptString(aValue));
+        } catch (final CryptoException e) {
+            e.printStackTrace();
+            store.removeProperty(aProperty);
+        }
+    }
+
+    /**
+     * @return the timestamp
+     */
+    public boolean isTimestamp() {
+        return timestamp;
+    }
+
+    public boolean isTimestampX() {
+        return advanced && timestamp;
+    }
+
+    /**
+     * @param timestamp the timestamp to set
+     */
+    public void setTimestamp(final boolean timestamp) {
+        this.timestamp = timestamp;
+    }
+
+    /**
+     * @return the tsaUrl
+     */
+    public String getTsaUrl() {
+        return tsaUrl;
+    }
+
+    /**
+     * @param tsaUrl the tsaUrl to set
+     */
+    public void setTsaUrl(final String tsaUrl) {
+        this.tsaUrl = tsaUrl;
+    }
+
+    /**
+     * @return the tsaUser
+     */
+    public String getTsaUser() {
+        return tsaUser;
+    }
+
+    /**
+     * @param tsaUser the tsaUser to set
+     */
+    public void setTsaUser(final String tsaUser) {
+        this.tsaUser = tsaUser;
+    }
+
+    /**
+     * @return the tsaServerAuthn
+     */
+    public ServerAuthentication getTsaServerAuthn() {
+        if (tsaServerAuthn == null) {
+            tsaServerAuthn = ServerAuthentication.NONE;
+        }
+        return tsaServerAuthn;
+    }
+
+    /**
+     * @param tsaServerAuthn the tsaServerAuthn to set
+     */
+    public void setTsaServerAuthn(final ServerAuthentication tsaServerAuthn) {
+        this.tsaServerAuthn = tsaServerAuthn;
+    }
+
+    /**
+     * @param aValue
+     */
+    public void setTsaServerAuthn(final String aValue) {
+        ServerAuthentication enumInstance = null;
+        if (aValue != null) {
+            try {
+                enumInstance = ServerAuthentication.valueOf(aValue.toUpperCase(Locale.ENGLISH));
+            } catch (final Exception e) {
+                // probably illegal value - fallback to a default (i.e. null)
+            }
+        }
+        setTsaServerAuthn(enumInstance);
+    }
+
+    /**
+     * @return the tsaCertFileType
+     */
+    public String getTsaCertFileType() {
+        return tsaCertFileType;
+    }
+
+    /**
+     * @param tsaCertFileType the tsaCertFileType to set
+     */
+    public void setTsaCertFileType(String tsaCertFileType) {
+        this.tsaCertFileType = tsaCertFileType;
+    }
+
+    /**
+     * @return the tsaCertFile
+     */
+    public String getTsaCertFile() {
+        return tsaCertFile;
+    }
+
+    /**
+     * @param tsaCertFile the tsaCertFile to set
+     */
+    public void setTsaCertFile(final String tsaCertFile) {
+        this.tsaCertFile = tsaCertFile;
+    }
+
+    /**
+     * @return the tsaCertFilePwd
+     */
+    public String getTsaCertFilePwd() {
+        return tsaCertFilePwd;
+    }
+
+    /**
+     * @param tsaCertFilePwd the tsaCertFilePwd to set
+     */
+    public void setTsaCertFilePwd(final String tsaCertFilePwd) {
+        this.tsaCertFilePwd = tsaCertFilePwd;
+    }
+
+    /**
+     * @return the tsaPolicy
+     */
+    public String getTsaPolicy() {
+        return tsaPolicy;
+    }
+
+    /**
+     * @param tsaPolicy the tsaPolicy to set
+     */
+    public void setTsaPolicy(final String tsaPolicy) {
+        this.tsaPolicy = tsaPolicy;
+    }
+
+    /**
+     * @return the tsaHashAlg
+     */
+    public String getTsaHashAlg() {
+        return tsaHashAlg;
+    }
+
+    /**
+     * Returns the effective TSA hash algorithm name, falling back to the configured default when none
+     * is set, normalised to its canonical form. The TSA hash is a free-text value on the CLI
+     * ({@code --tsa-hash-alg}), the Swing dialog and the properties file, so a lowercase entry such as
+     * {@code sha256} would otherwise reach iText's {@code setDigestName} (NPE) or DSS's
+     * {@code DigestAlgorithm.forJavaName} (exception). Canonicalising here gives both engines a value
+     * they accept.
+     *
+     * @return the canonical TSA hash algorithm name (e.g. {@code SHA-256})
+     */
+    public String getTsaHashAlgWithFallback() {
+        return normalizeTsaHashAlg(StringUtils.defaultIfBlank(tsaHashAlg, AppConfig.defaultTsaHashAlg()));
+    }
+
+    /**
+     * Normalises a free-text TSA hash algorithm name to its canonical form. Recognised algorithms are
+     * mapped to their canonical spelling (e.g. {@code sha256} / {@code sha-256} &rarr; {@code SHA-256});
+     * an unrecognised value is uppercased so it still survives the digest-name lookup in the signing
+     * engines instead of triggering a {@link NullPointerException}.
+     *
+     * @param value the raw hash name (may be {@code null} or blank)
+     * @return the canonical name, or {@code null} when the input is blank
+     */
+    static String normalizeTsaHashAlg(String value) {
+        if (StringUtils.isBlank(value)) {
+            return null;
+        }
+        final String trimmed = value.trim();
+        final HashAlgorithm known = HashAlgorithm.fromAlgorithmName(trimmed);
+        return known != null ? known.getAlgorithmName() : trimmed.toUpperCase(Locale.ROOT);
+    }
+
+    /**
+     * @param tsaHashAlg the tsaHashAlg to set
+     */
+    public void setTsaHashAlg(String tsaHashAlg) {
+        this.tsaHashAlg = tsaHashAlg;
+    }
+
+    /**
+     * @return the tsaPasswd
+     */
+    public String getTsaPasswd() {
+        return tsaPasswd;
+    }
+
+    /**
+     * @param tsaPasswd the tsaPasswd to set
+     */
+    public void setTsaPasswd(final String tsaPasswd) {
+        this.tsaPasswd = tsaPasswd;
+    }
+
+    /**
+     * @return the ocspEnabled
+     */
+    public boolean isOcspEnabled() {
+        return ocspEnabled;
+    }
+
+    public boolean isOcspEnabledX() {
+        return advanced && ocspEnabled;
+    }
+
+    /**
+     * @param ocspEnabled the ocspEnabled to set
+     */
+    public void setOcspEnabled(final boolean ocspEnabled) {
+        this.ocspEnabled = ocspEnabled;
+    }
+
+    /**
+     * @return the ocspServerUrl
+     */
+    public String getOcspServerUrl() {
+        return ocspServerUrl;
+    }
+
+    /**
+     * @param ocspServerUrl the ocspServerUrl to set
+     */
+    public void setOcspServerUrl(final String ocspServerUrl) {
+        this.ocspServerUrl = ocspServerUrl;
+    }
+
+    public boolean isStorePasswords() {
+        return storePasswords;
+    }
+
+    public void setStorePasswords(final boolean storePasswords) {
+        this.storePasswords = storePasswords;
+    }
+
+    /**
+     * @return the contact
+     */
+    public String getContact() {
+        return contact;
+    }
+
+    /**
+     * @param contact the contact to set
+     */
+    public void setContact(final String contact) {
+        this.contact = contact;
+    }
+
+    public boolean isCrlEnabled() {
+        return crlEnabled;
+    }
+
+    public boolean isCrlEnabledX() {
+        return advanced && crlEnabled;
+    }
+
+    public void setCrlEnabled(final boolean crlEnabled) {
+        this.crlEnabled = crlEnabled;
+    }
+
+    public HashAlgorithm getHashAlgorithm() {
+        return hashAlgorithm == null ? Constants.DEFVAL_HASH_ALGORITHM : hashAlgorithm;
+    }
+
+    /**
+     * Whether a hash algorithm was explicitly selected (CLI {@code --hash-algorithm}, stored config, or
+     * GUI selection), as opposed to falling back to {@link Constants#DEFVAL_HASH_ALGORITHM}. Used to tell
+     * a deliberate user choice from the legacy default, so capability validation only fails fast on the
+     * former and engines may transparently upgrade the latter to a supported digest.
+     *
+     * @return true when a hash algorithm has been set
+     */
+    public boolean isHashAlgorithmSet() {
+        return hashAlgorithm != null;
+    }
+
+    public HashAlgorithm getHashAlgorithmX() {
+        if (!advanced) {
+            return Constants.DEFVAL_HASH_ALGORITHM;
+        }
+        return getHashAlgorithm();
+    }
+
+    public void setHashAlgorithm(final HashAlgorithm hashAlgorithm) {
+        this.hashAlgorithm = hashAlgorithm;
+    }
+
+    public void setHashAlgorithm(final String aValue) {
+        HashAlgorithm hashAlg = null;
+        if (StringUtils.isNotEmpty(aValue)) {
+            try {
+                hashAlg = HashAlgorithm.valueOf(aValue.toUpperCase(Locale.ENGLISH));
+            } catch (final Exception e) {
+                // probably illegal value - fallback to a default (i.e. null)
+            }
+        }
+        setHashAlgorithm(hashAlg);
+    }
+
+    /**
+     * @return the selected PAdES baseline level, or {@code null} for the engine default
+     */
+    public PadesLevel getPadesLevel() {
+        return padesLevel;
+    }
+
+    /**
+     * @param padesLevel the PAdES baseline level to set ({@code null} = engine default)
+     */
+    public void setPadesLevel(final PadesLevel padesLevel) {
+        this.padesLevel = padesLevel;
+    }
+
+    /**
+     * Sets the PAdES baseline level from a (short or full) string token. Unrecognised or empty values
+     * reset the level to {@code null} (engine default).
+     *
+     * @param aValue the level token ({@code B} / {@code T} / {@code LT} / {@code LTA} or full enum name)
+     */
+    public void setPadesLevel(final String aValue) {
+        setPadesLevel(PadesLevel.fromString(aValue));
+    }
+
+    public Proxy.Type getProxyType() {
+        if (proxyType == null) {
+            proxyType = Constants.DEFVAL_PROXY_TYPE;
+        }
+        return proxyType;
+    }
+
+    public void setProxyType(final Proxy.Type proxyType) {
+        this.proxyType = proxyType;
+    }
+
+    public void setProxyType(final String aValue) {
+        Proxy.Type proxy = null;
+        if (StringUtils.isNotEmpty(aValue)) {
+            try {
+                proxy = Proxy.Type.valueOf(aValue.toUpperCase(Locale.ENGLISH));
+            } catch (final Exception e) {
+                // probably illegal value - fallback to a default (i.e. null)
+            }
+        }
+        setProxyType(proxy);
+    }
+
+    public String getProxyHost() {
+        return proxyHost;
+    }
+
+    public void setProxyHost(final String proxyHost) {
+        this.proxyHost = proxyHost;
+    }
+
+    public int getProxyPort() {
+        return proxyPort;
+    }
+
+    public void setProxyPort(final int proxyPort) {
+        this.proxyPort = proxyPort;
+    }
+
+    /**
+     * Creates and returns Proxy object, which should be used for URL connections in JSignPdf.
+     *
+     * @return initialized Proxy object.
+     */
+    public Proxy createProxy() {
+        Proxy tmpResult = Proxy.NO_PROXY;
+        if (isAdvanced() && getProxyType() != Proxy.Type.DIRECT) {
+            tmpResult = new Proxy(getProxyType(), new InetSocketAddress(getProxyHost(), getProxyPort()));
+        }
+        return tmpResult;
+    }
+
+    /**
+     * @return the signing-engine id override (CLI {@code --engine}), or {@code null} when unset
+     */
+    public String getEngine() {
+        return engine;
+    }
+
+    /**
+     * @param engine the signing-engine id override to set (CLI {@code --engine})
+     */
+    public void setEngine(final String engine) {
+        this.engine = engine;
+    }
+
+    protected String[] getCmdLine() {
+        return cmdLine;
+    }
+
+    protected void setCmdLine(String[] cmdLine) {
+        this.cmdLine = cmdLine;
+    }
+
+    /**
+     * Creates a shallow copy of this options instance. Enum and String fields are
+     * effectively immutable, so shallow copy is sufficient for thread-safety.
+     * char[] fields are defensively copied.
+     *
+     * @return a new BasicSignerOptions with the same field values
+     */
+    public BasicSignerOptions createCopy() {
+        BasicSignerOptions copy = new BasicSignerOptions();
+        copy.setKsType(getKsType());
+        copy.setKsProvider(getKsProvider());
+        copy.setKsFile(getKsFile());
+        copy.setKsPasswd(getKsPasswd() != null ? getKsPasswd().clone() : null);
+        copy.setKeyAlias(getKeyAlias());
+        copy.setKeyIndex(getKeyIndex());
+        copy.setKeyPasswd(getKeyPasswd() != null ? getKeyPasswd().clone() : null);
+        copy.setInFile(getInFile());
+        copy.setOutFile(getOutFile());
+        copy.setOutSuffix(getOutSuffix());
+        copy.setOutPath(getOutPathRaw());
+        copy.setOutPrefix(getOutPrefix());
+        copy.setTimestampOnly(isTimestampOnly());
+        copy.setSignerName(getSignerName());
+        copy.setReason(getReason());
+        copy.setLocation(getLocation());
+        copy.setContact(getContact());
+        copy.setListener(getListener());
+        copy.setAppend(isAppend());
+        copy.setAdvanced(isAdvanced());
+        copy.setPdfEncryption(getPdfEncryption());
+        copy.setPdfOwnerPwd(getPdfOwnerPwd() != null ? getPdfOwnerPwd().clone() : null);
+        copy.setPdfUserPwd(getPdfUserPwd() != null ? getPdfUserPwd().clone() : null);
+        copy.setPdfEncryptionCertFile(getPdfEncryptionCertFile());
+        copy.setCertLevel(getCertLevel());
+        copy.setHashAlgorithm(getHashAlgorithm());
+        copy.setPadesLevel(getPadesLevel());
+        copy.setStorePasswords(isStorePasswords());
+        copy.setRightPrinting(getRightPrinting());
+        copy.setRightCopy(isRightCopy());
+        copy.setRightAssembly(isRightAssembly());
+        copy.setRightFillIn(isRightFillIn());
+        copy.setRightScreanReaders(isRightScreanReaders());
+        copy.setRightModifyAnnotations(isRightModifyAnnotations());
+        copy.setRightModifyContents(isRightModifyContents());
+        copy.setVisible(isVisible());
+        copy.setPage(getPage());
+        copy.setPositionLLX(getPositionLLX());
+        copy.setPositionLLY(getPositionLLY());
+        copy.setPositionURX(getPositionURX());
+        copy.setPositionURY(getPositionURY());
+        copy.setBgImgScale(getBgImgScale());
+        copy.setRenderMode(getRenderMode());
+        copy.setL2Text(getL2Text());
+        copy.setL4Text(getL4Text());
+        copy.setL2TextFontSize(getL2TextFontSize());
+        copy.setImgPath(getImgPath());
+        copy.setBgImgPath(getBgImgPath());
+        copy.setAcro6Layers(isAcro6Layers());
+        copy.setSigFieldName(getSigFieldName());
+        copy.setTimestamp(isTimestamp());
+        copy.setTsaUrl(getTsaUrl());
+        copy.setTsaServerAuthn(getTsaServerAuthn());
+        copy.setTsaUser(getTsaUser());
+        copy.setTsaPasswd(getTsaPasswd());
+        copy.setTsaCertFileType(getTsaCertFileType());
+        copy.setTsaCertFile(getTsaCertFile());
+        copy.setTsaCertFilePwd(getTsaCertFilePwd());
+        copy.setTsaPolicy(getTsaPolicy());
+        copy.setTsaHashAlg(getTsaHashAlg());
+        copy.setOcspEnabled(isOcspEnabled());
+        copy.setOcspServerUrl(getOcspServerUrl());
+        copy.setCrlEnabled(isCrlEnabled());
+        copy.setProxyType(getProxyType());
+        copy.setProxyHost(getProxyHost());
+        copy.setProxyPort(getProxyPort());
+        copy.setEngine(getEngine());
+        return copy;
+    }
+
+    @Override
+    public int hashCode() {
+        final int prime = 31;
+        int result = 1;
+        result = prime * result + Arrays.hashCode(cmdLine);
+        result = prime * result + Arrays.hashCode(keyPasswd);
+        result = prime * result + Arrays.hashCode(ksPasswd);
+        result = prime * result + Arrays.hashCode(pdfOwnerPwd);
+        result = prime * result + Arrays.hashCode(pdfUserPwd);
+        result = prime * result + Objects.hash(acro6Layers, advanced, append, bgImgPath, bgImgScale, certLevel, contact,
+                crlEnabled, encryptor, hashAlgorithm, imgPath, inFile, keyAlias, keyIndex, ksFile, ksProvider, ksType, l2Text,
+                l2TextFontSize, l4Text, listener, location, ocspEnabled, ocspServerUrl, outFile, page, pdfEncryption,
+                padesLevel, pdfEncryptionCertFile, positionLLX, positionLLY, positionURX, positionURY, propertiesFilePath,
+                props, proxyHost,
+                proxyPort, proxyType, reason, renderMode, rightAssembly, rightCopy, rightFillIn, rightModifyAnnotations,
+                rightModifyContents, rightPrinting, rightScreanReaders, signerName, storePasswords, timestamp, tsaCertFile,
+                tsaCertFilePwd, tsaCertFileType, tsaHashAlg, tsaPasswd, tsaPolicy, tsaServerAuthn, tsaUrl, tsaUser, visible);
+        return result;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj)
+            return true;
+        if (obj == null)
+            return false;
+        if (getClass() != obj.getClass())
+            return false;
+        BasicSignerOptions other = (BasicSignerOptions) obj;
+        return acro6Layers == other.acro6Layers && advanced == other.advanced && append == other.append
+                && Objects.equals(bgImgPath, other.bgImgPath)
+                && Float.floatToIntBits(bgImgScale) == Float.floatToIntBits(other.bgImgScale) && certLevel == other.certLevel
+                && Arrays.equals(cmdLine, other.cmdLine) && Objects.equals(contact, other.contact)
+                && crlEnabled == other.crlEnabled && Objects.equals(encryptor, other.encryptor)
+                && hashAlgorithm == other.hashAlgorithm && Objects.equals(imgPath, other.imgPath)
+                && Objects.equals(inFile, other.inFile) && Objects.equals(keyAlias, other.keyAlias)
+                && keyIndex == other.keyIndex && Arrays.equals(keyPasswd, other.keyPasswd)
+                && Objects.equals(ksFile, other.ksFile) && Arrays.equals(ksPasswd, other.ksPasswd)
+                && Objects.equals(ksType, other.ksType) && Objects.equals(ksProvider, other.ksProvider)
+                && Objects.equals(l2Text, other.l2Text)
+                && Float.floatToIntBits(l2TextFontSize) == Float.floatToIntBits(other.l2TextFontSize)
+                && Objects.equals(l4Text, other.l4Text) && Objects.equals(listener, other.listener)
+                && Objects.equals(location, other.location) && ocspEnabled == other.ocspEnabled
+                && Objects.equals(ocspServerUrl, other.ocspServerUrl) && Objects.equals(outFile, other.outFile)
+                && page == other.page && padesLevel == other.padesLevel && pdfEncryption == other.pdfEncryption
+                && Objects.equals(pdfEncryptionCertFile, other.pdfEncryptionCertFile)
+                && Arrays.equals(pdfOwnerPwd, other.pdfOwnerPwd) && Arrays.equals(pdfUserPwd, other.pdfUserPwd)
+                && Float.floatToIntBits(positionLLX) == Float.floatToIntBits(other.positionLLX)
+                && Float.floatToIntBits(positionLLY) == Float.floatToIntBits(other.positionLLY)
+                && Float.floatToIntBits(positionURX) == Float.floatToIntBits(other.positionURX)
+                && Float.floatToIntBits(positionURY) == Float.floatToIntBits(other.positionURY)
+                && Objects.equals(propertiesFilePath, other.propertiesFilePath) && Objects.equals(props, other.props)
+                && Objects.equals(proxyHost, other.proxyHost) && proxyPort == other.proxyPort && proxyType == other.proxyType
+                && Objects.equals(reason, other.reason) && renderMode == other.renderMode
+                && rightAssembly == other.rightAssembly && rightCopy == other.rightCopy && rightFillIn == other.rightFillIn
+                && rightModifyAnnotations == other.rightModifyAnnotations && rightModifyContents == other.rightModifyContents
+                && rightPrinting == other.rightPrinting && rightScreanReaders == other.rightScreanReaders
+                && Objects.equals(signerName, other.signerName) && storePasswords == other.storePasswords
+                && timestamp == other.timestamp && Objects.equals(tsaCertFile, other.tsaCertFile)
+                && Objects.equals(tsaCertFilePwd, other.tsaCertFilePwd)
+                && Objects.equals(tsaCertFileType, other.tsaCertFileType) && Objects.equals(tsaHashAlg, other.tsaHashAlg)
+                && Objects.equals(tsaPasswd, other.tsaPasswd) && Objects.equals(tsaPolicy, other.tsaPolicy)
+                && tsaServerAuthn == other.tsaServerAuthn && Objects.equals(tsaUrl, other.tsaUrl)
+                && Objects.equals(tsaUser, other.tsaUser) && visible == other.visible;
+    }
+}

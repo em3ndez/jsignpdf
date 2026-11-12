@@ -1,0 +1,191 @@
+package net.sf.jsignpdf.utils;
+
+import static net.sf.jsignpdf.Constants.LOGGER;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.Properties;
+import java.util.logging.Level;
+
+/**
+ * Hands out {@link PropertyProvider} instances backed by the right file under the resolved config directory.
+ */
+public final class PropertyStoreFactory {
+
+    private static final String PRESET_FILENAME_PREFIX = "preset-";
+    private static final String PRESET_FILENAME_SUFFIX = ".properties";
+    private static final String ADVANCED_DEFAULTS_RESOURCE = "/net/sf/jsignpdf/conf/advanced.default.properties";
+
+    private static volatile PropertyStoreFactory instance;
+
+    private final ConfigLocationResolver resolver;
+    private volatile PropertyProvider mainConfig;
+    private volatile AdvancedConfig advancedConfig;
+    private volatile Properties advancedDefaultsCache;
+
+    public PropertyStoreFactory(ConfigLocationResolver resolver) {
+        this.resolver = resolver;
+    }
+
+    public static PropertyStoreFactory getInstance() {
+        PropertyStoreFactory ref = instance;
+        if (ref == null) {
+            synchronized (PropertyStoreFactory.class) {
+                ref = instance;
+                if (ref == null) {
+                    ref = new PropertyStoreFactory(ConfigLocationResolver.getInstance());
+                    instance = ref;
+                }
+            }
+        }
+        return ref;
+    }
+
+    /**
+     * Returns the cached {@link PropertyProvider} backed by the main config file. On first call it loads from disk.
+     * Returns an in-memory-only provider if the config directory cannot be resolved. The same instance is handed out to
+     * every caller so their views of the main config stay consistent (e.g. signing options and recent-file list share
+     * one backing Properties).
+     */
+    public PropertyProvider mainConfig() {
+        PropertyProvider ref = mainConfig;
+        if (ref == null) {
+            synchronized (this) {
+                ref = mainConfig;
+                if (ref == null) {
+                    Path file = resolver.getMainConfigFile();
+                    ref = new PropertyProvider(file);
+                    ref.load();
+                    mainConfig = ref;
+                }
+            }
+        }
+        return ref;
+    }
+
+    /**
+     * Returns a {@link PropertyProvider} backed by the given preset file (by filename, without directory).
+     */
+    public PropertyProvider preset(String filename) {
+        Path dir = resolver.getPresetsDir();
+        if (dir == null) {
+            return new PropertyProvider(null);
+        }
+        PropertyProvider provider = new PropertyProvider(dir.resolve(filename));
+        provider.load();
+        return provider;
+    }
+
+    /**
+     * Creates an empty {@link PropertyProvider} backed by a fresh {@code preset-<epochMillis>.properties} file in the presets
+     * directory. Resolves filename collisions by appending a counter suffix. The file is not written until
+     * {@link PropertyProvider#save()} is called.
+     */
+    public PropertyProvider newPreset() {
+        Path dir = resolver.getPresetsDir();
+        if (dir == null) {
+            return new PropertyProvider(null);
+        }
+        try {
+            Files.createDirectories(dir);
+        } catch (IOException e) {
+            LOGGER.log(Level.WARNING, "Failed to create presets directory " + dir, e);
+            return new PropertyProvider(null);
+        }
+        long ts = System.currentTimeMillis();
+        Path target = dir.resolve(PRESET_FILENAME_PREFIX + ts + PRESET_FILENAME_SUFFIX);
+        int counter = 2;
+        while (Files.exists(target)) {
+            target = dir.resolve(PRESET_FILENAME_PREFIX + ts + "-" + counter + PRESET_FILENAME_SUFFIX);
+            counter++;
+        }
+        return new PropertyProvider(target);
+    }
+
+    public ConfigLocationResolver getResolver() {
+        return resolver;
+    }
+
+    /**
+     * Returns the cached {@link AdvancedConfig} backed by {@code <cfg>/advanced.properties}. Lazily loads on first call.
+     * Bundled defaults are read once from the jar resource and reused.
+     */
+    public AdvancedConfig advancedConfig() {
+        AdvancedConfig ref = advancedConfig;
+        if (ref == null) {
+            synchronized (this) {
+                ref = advancedConfig;
+                if (ref == null) {
+                    Path file = resolver.getAdvancedConfigFile();
+                    ref = new AdvancedConfig(file, loadAdvancedDefaults());
+                    advancedConfig = ref;
+                }
+            }
+        }
+        return ref;
+    }
+
+    private Properties loadAdvancedDefaults() {
+        Properties cached = advancedDefaultsCache;
+        if (cached == null) {
+            cached = new Properties();
+            try (InputStream is = PropertyStoreFactory.class.getResourceAsStream(ADVANCED_DEFAULTS_RESOURCE)) {
+                if (is != null) {
+                    cached.load(is);
+                } else {
+                    LOGGER.warning("Bundled defaults missing: " + ADVANCED_DEFAULTS_RESOURCE);
+                }
+            } catch (IOException e) {
+                LOGGER.log(Level.WARNING, "Failed to load bundled advanced.default.properties", e);
+            }
+            advancedDefaultsCache = cached;
+        }
+        return cached;
+    }
+
+    /**
+     * Wipes every file under the resolved config directory (main config file, presets, anything else) and clears the in-memory
+     * state of the cached main-config provider so every existing holder sees the reset. The config directory itself is kept
+     * so subsequent writes don't race with directory creation.
+     */
+    public synchronized void resetAll() {
+        Path dir = resolver.getConfigDir();
+        if (dir != null) {
+            deleteDirectoryContents(dir);
+        }
+        if (mainConfig != null) {
+            mainConfig.clear();
+        }
+        advancedConfig = null;
+    }
+
+    private static void deleteDirectoryContents(Path dir) {
+        if (!Files.isDirectory(dir)) {
+            return;
+        }
+        try {
+            Files.walkFileTree(dir, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                    Files.deleteIfExists(file);
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult postVisitDirectory(Path d, IOException exc) throws IOException {
+                    if (!d.equals(dir)) {
+                        Files.deleteIfExists(d);
+                    }
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (IOException e) {
+            LOGGER.log(Level.WARNING, "Failed to wipe config directory " + dir, e);
+        }
+    }
+}

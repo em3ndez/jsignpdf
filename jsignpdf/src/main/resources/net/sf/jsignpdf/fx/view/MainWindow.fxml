@@ -1,0 +1,263 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.image.Image?>
+<?import javafx.scene.image.ImageView?>
+<?import javafx.scene.layout.*?>
+<?import javafx.scene.shape.SVGPath?>
+<?import net.sf.jsignpdf.fx.control.SignaturePreviewStackPane?>
+
+<BorderPane xmlns="http://javafx.com/javafx"
+            xmlns:fx="http://javafx.com/fxml"
+            fx:controller="net.sf.jsignpdf.fx.view.MainWindowController"
+            prefWidth="1100" prefHeight="750">
+
+    <!-- Menu Bar -->
+    <top>
+        <VBox>
+            <MenuBar>
+                <Menu text="%jfx.gui.menu.file">
+                    <MenuItem fx:id="menuOpen" text="%jfx.gui.menu.file.open" onAction="#onFileOpen"
+                              accelerator="Shortcut+O">
+                        <graphic><ImageView fitWidth="16" fitHeight="16" preserveRatio="true">
+                            <Image url="@/net/sf/jsignpdf/fileopen16.png"/>
+                        </ImageView></graphic>
+                    </MenuItem>
+                    <MenuItem fx:id="menuClose" text="%jfx.gui.menu.file.close" onAction="#onFileClose"/>
+                    <SeparatorMenuItem/>
+                    <MenuItem fx:id="menuSaveAs" text="%jfx.gui.menu.file.saveAs" onAction="#onSaveAs"
+                              accelerator="Shortcut+Shift+S"/>
+                    <SeparatorMenuItem/>
+                    <Menu fx:id="menuRecentFiles" text="%jfx.gui.menu.file.recentFiles"/>
+                    <SeparatorMenuItem/>
+                    <MenuItem fx:id="menuResetSettings" text="%jfx.gui.menu.file.resetSettings"
+                              onAction="#onResetSettings"/>
+                    <MenuItem fx:id="menuPreferences" text="%jfx.gui.menu.file.preferences"
+                              onAction="#onPreferences" accelerator="Shortcut+Comma"/>
+                    <SeparatorMenuItem/>
+                    <MenuItem fx:id="menuExit" text="%jfx.gui.menu.file.exit" onAction="#onFileExit"
+                              accelerator="Shortcut+Q"/>
+                </Menu>
+                <Menu text="%jfx.gui.menu.view">
+                    <MenuItem fx:id="menuZoomIn" text="%jfx.gui.menu.view.zoomIn" onAction="#onZoomIn"
+                              accelerator="Shortcut+EQUALS"/>
+                    <MenuItem fx:id="menuZoomOut" text="%jfx.gui.menu.view.zoomOut" onAction="#onZoomOut"
+                              accelerator="Shortcut+MINUS"/>
+                    <MenuItem fx:id="menuZoomFit" text="%jfx.gui.menu.view.fitPage" onAction="#onZoomFit"/>
+                    <SeparatorMenuItem/>
+                    <MenuItem fx:id="menuToggleSidePanel" text="%jfx.gui.menu.view.toggleSidePanel"
+                              onAction="#onToggleSidePanel" accelerator="F9"/>
+                </Menu>
+                <Menu text="%jfx.gui.menu.signing">
+                    <CheckMenuItem fx:id="menuVisibleSig" text="%jfx.gui.menu.signing.visibleSig"/>
+                    <SeparatorMenuItem/>
+                    <MenuItem fx:id="menuSign" text="%jfx.gui.menu.file.sign" onAction="#onSign" accelerator="Shortcut+S">
+                        <graphic><ImageView fitWidth="16" fitHeight="16" preserveRatio="true">
+                            <Image url="@/net/sf/jsignpdf/signedpdf16.png"/>
+                        </ImageView></graphic>
+                    </MenuItem>
+                    <MenuItem fx:id="menuTimestamp" text="%jfx.gui.menu.signing.timestamp"
+                              onAction="#onTimestamp" accelerator="Shortcut+T">
+                        <graphic><ImageView fitWidth="16" fitHeight="16" preserveRatio="true">
+                            <Image url="@/net/sf/jsignpdf/timestamp16.png"/>
+                        </ImageView></graphic>
+                    </MenuItem>
+                </Menu>
+                <Menu text="%jfx.gui.menu.presets">
+                    <MenuItem fx:id="menuSavePresetAsNew" text="%jfx.gui.menu.presets.saveAsNew"
+                              onAction="#onSavePresetAsNew"/>
+                    <MenuItem fx:id="menuManagePresets" text="%jfx.gui.menu.presets.manage"
+                              onAction="#onManagePresets"/>
+                </Menu>
+                <Menu text="%jfx.gui.menu.help">
+                    <MenuItem fx:id="menuAbout" text="%jfx.gui.menu.help.about" onAction="#onAbout">
+                        <graphic><ImageView fitWidth="16" fitHeight="16" preserveRatio="true">
+                            <Image url="@/net/sf/jsignpdf/signedpdf16.png"/>
+                        </ImageView></graphic>
+                    </MenuItem>
+                </Menu>
+            </MenuBar>
+
+            <!-- Toolbar: the left bar collapses into an overflow menu when space is tight;
+                 the trailing bar keeps the primary Sign / Timestamp actions always visible. -->
+            <HBox styleClass="main-toolbar-row">
+            <ToolBar styleClass="main-toolbar" HBox.hgrow="ALWAYS" maxWidth="Infinity">
+                <Button fx:id="btnOpen" text="%jfx.gui.toolbar.open" onAction="#onFileOpen"
+                        styleClass="toolbar-button">
+                    <graphic><ImageView fitWidth="16" fitHeight="16" preserveRatio="true">
+                        <Image url="@/net/sf/jsignpdf/fileopen16.png"/>
+                    </ImageView></graphic>
+                </Button>
+                <Separator orientation="VERTICAL"/>
+                <Button fx:id="btnZoomIn" text="+" onAction="#onZoomIn"
+                        styleClass="toolbar-button" mnemonicParsing="false"/>
+                <Button fx:id="btnZoomOut" text="-" onAction="#onZoomOut"
+                        styleClass="toolbar-button" mnemonicParsing="false"/>
+                <Button fx:id="btnZoomFit" text="%jfx.gui.toolbar.fit" onAction="#onZoomFit"
+                        styleClass="toolbar-button"/>
+                <ComboBox fx:id="cmbZoom" editable="true" prefWidth="80"/>
+                <Separator orientation="VERTICAL"/>
+                <Button fx:id="btnPrevPage" onAction="#onPrevPage"
+                        styleClass="toolbar-button">
+                    <graphic><ImageView fitWidth="16" fitHeight="16" preserveRatio="true">
+                        <Image url="@/net/sf/jsignpdf/prev16.png"/>
+                    </ImageView></graphic>
+                </Button>
+                <TextField fx:id="txtPageNumber" prefColumnCount="3" alignment="CENTER"/>
+                <Label fx:id="lblPageCount" text="/ 0"/>
+                <Button fx:id="btnNextPage" onAction="#onNextPage"
+                        styleClass="toolbar-button">
+                    <graphic><ImageView fitWidth="16" fitHeight="16" preserveRatio="true">
+                        <Image url="@/net/sf/jsignpdf/next16.png"/>
+                    </ImageView></graphic>
+                </Button>
+                <Separator orientation="VERTICAL"/>
+                <ToggleButton fx:id="btnVisibleSig" mnemonicParsing="false"
+                              contentDisplay="GRAPHIC_ONLY"
+                              styleClass="toolbar-button,toolbar-toggle">
+                    <graphic>
+                        <SVGPath styleClass="eye-icon"
+                                 content="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8zM8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/>
+                    </graphic>
+                    <tooltip>
+                        <Tooltip text="%jfx.gui.toolbar.visibleSig.tooltip"/>
+                    </tooltip>
+                </ToggleButton>
+                <ToggleButton fx:id="btnTsa" mnemonicParsing="false"
+                              contentDisplay="GRAPHIC_ONLY"
+                              styleClass="toolbar-button,toolbar-toggle">
+                    <graphic>
+                        <SVGPath styleClass="clock-icon"
+                                 content="M8 3.5a.5.5 0 0 0-1 0V9a.5.5 0 0 0 .252.434l3.5 2a.5.5 0 0 0 .496-.868L8 8.71V3.5zM8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16zm7-8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z"/>
+                    </graphic>
+                    <tooltip>
+                        <Tooltip text="%jfx.gui.toolbar.tsa.tooltip"/>
+                    </tooltip>
+                </ToggleButton>
+                <Separator orientation="VERTICAL"/>
+                <Label text="%jfx.gui.preset.label"/>
+                <ComboBox fx:id="cmbPresets" prefWidth="180">
+                    <tooltip>
+                        <Tooltip text="%jfx.gui.preset.tooltip"/>
+                    </tooltip>
+                </ComboBox>
+            </ToolBar>
+            <HBox styleClass="main-toolbar,trailing-actions" alignment="CENTER_LEFT"
+                  minWidth="-Infinity">
+                <Button fx:id="btnSign" text="%jfx.gui.toolbar.sign" onAction="#onSign"
+                        styleClass="toolbar-button,sign-button">
+                    <graphic><ImageView fitWidth="26" fitHeight="26" preserveRatio="true">
+                        <Image url="@/net/sf/jsignpdf/signedpdf26.png"/>
+                    </ImageView></graphic>
+                </Button>
+                <Button fx:id="btnTimestamp" text="%jfx.gui.toolbar.timestamp" onAction="#onTimestamp"
+                        styleClass="toolbar-button">
+                    <graphic><ImageView fitWidth="26" fitHeight="26" preserveRatio="true">
+                        <Image url="@/net/sf/jsignpdf/timestamp26.png"/>
+                    </ImageView></graphic>
+                    <tooltip>
+                        <Tooltip text="%jfx.gui.toolbar.timestamp.tooltip"/>
+                    </tooltip>
+                </Button>
+            </HBox>
+            </HBox>
+        </VBox>
+    </top>
+
+    <!-- Main content: vertical split with main area on top and output console on bottom -->
+    <center>
+        <SplitPane fx:id="verticalSplit" orientation="VERTICAL" dividerPositions="0.8">
+            <SplitPane fx:id="splitPane" dividerPositions="0.28"
+                       onDragOver="#onDragOver" onDragDropped="#onDragDropped">
+                <!-- Side panel with accordion for settings -->
+                <AnchorPane minWidth="250" prefWidth="300" styleClass="side-panel">
+                    <Accordion fx:id="sidePanelAccordion"
+                               AnchorPane.topAnchor="0" AnchorPane.bottomAnchor="0"
+                               AnchorPane.leftAnchor="0" AnchorPane.rightAnchor="0">
+                        <panes>
+                            <TitledPane text="%jfx.gui.panel.certificate" expanded="true">
+                                <fx:include fx:id="certificateSettings"
+                                            source="CertificateSettings.fxml"/>
+                            </TitledPane>
+                            <TitledPane text="%jfx.gui.panel.signatureProperties">
+                                <ScrollPane fitToWidth="true">
+                                    <fx:include fx:id="signatureProperties"
+                                                source="SignatureProperties.fxml"/>
+                                </ScrollPane>
+                            </TitledPane>
+                            <TitledPane fx:id="padesLevelAccordionPane"
+                                        text="%jfx.gui.panel.padesLevel">
+                                <VBox spacing="6">
+                                    <padding>
+                                        <Insets top="8" right="8" bottom="8" left="8"/>
+                                    </padding>
+                                    <Label fx:id="lblPadesLevel" text="%jfx.gui.padesLevel.label"/>
+                                    <ChoiceBox fx:id="cmbPadesLevel" prefWidth="120">
+                                        <tooltip>
+                                            <Tooltip text="%jfx.gui.padesLevel.tooltip"/>
+                                        </tooltip>
+                                    </ChoiceBox>
+                                    <Label text="%jfx.gui.padesLevel.help"
+                                           styleClass="pref-help" wrapText="true"/>
+                                </VBox>
+                            </TitledPane>
+                            <TitledPane fx:id="signatureAppearanceAccordionPane"
+                                        text="%jfx.gui.panel.signatureAppearance">
+                                <ScrollPane fitToWidth="true">
+                                    <fx:include fx:id="signatureSettings"
+                                                source="SignatureSettings.fxml"/>
+                                </ScrollPane>
+                            </TitledPane>
+                            <TitledPane fx:id="tsaAccordionPane"
+                                        text="%jfx.gui.panel.timestampValidation">
+                                <ScrollPane fitToWidth="true">
+                                    <fx:include fx:id="tsaSettings"
+                                                source="TsaSettings.fxml"/>
+                                </ScrollPane>
+                            </TitledPane>
+                            <TitledPane fx:id="encryptionAccordionPane"
+                                        text="%jfx.gui.panel.encryptionRights">
+                                <ScrollPane fitToWidth="true">
+                                    <fx:include fx:id="encryptionSettings"
+                                                source="EncryptionSettings.fxml"/>
+                                </ScrollPane>
+                            </TitledPane>
+                        </panes>
+                    </Accordion>
+                </AnchorPane>
+
+                <!-- PDF Preview Area -->
+                <ScrollPane fx:id="scrollPane" pannable="true" styleClass="pdf-scroll-pane"
+                            fitToWidth="true" fitToHeight="true"
+                            onDragOver="#onDragOver" onDragDropped="#onDragDropped">
+                    <SignaturePreviewStackPane fx:id="pdfArea" styleClass="pdf-area">
+                        <Label fx:id="lblDropHint" text="%jfx.gui.dropHint"
+                               styleClass="drop-hint"/>
+                    </SignaturePreviewStackPane>
+                </ScrollPane>
+            </SplitPane>
+
+            <!-- Output Console -->
+            <fx:include fx:id="outputConsole" source="OutputConsole.fxml"/>
+        </SplitPane>
+    </center>
+
+    <!-- Status Bar -->
+    <bottom>
+        <HBox styleClass="status-bar" spacing="10" alignment="CENTER_LEFT">
+            <padding>
+                <Insets top="4" bottom="4" left="8" right="8"/>
+            </padding>
+            <Label fx:id="lblStatus" text="%jfx.gui.status.ready" HBox.hgrow="ALWAYS"
+                   maxWidth="Infinity"/>
+            <Label fx:id="lblSigStateBadge" text="%jfx.gui.status.invisibleSig"
+                   styleClass="invisible-sig-badge" managed="false" visible="false"/>
+            <Label fx:id="lblSigCoords" styleClass="sig-coords-badge"
+                   managed="false" visible="false"/>
+            <Label fx:id="lblOutputPath" styleClass="output-path-label"
+                   managed="false" visible="false"/>
+            <ProgressBar fx:id="progressBar" prefWidth="150"/>
+        </HBox>
+    </bottom>
+</BorderPane>

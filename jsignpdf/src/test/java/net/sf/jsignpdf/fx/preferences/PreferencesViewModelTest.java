@@ -1,0 +1,264 @@
+package net.sf.jsignpdf.fx.preferences;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Properties;
+
+import net.sf.jsignpdf.pkcs11.Pkcs11Profile;
+import net.sf.jsignpdf.pkcs11.Pkcs11Profiles;
+import net.sf.jsignpdf.pkcs11.ProviderMode;
+
+import net.sf.jsignpdf.utils.AdvancedConfig;
+
+import org.junit.Before;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
+
+/**
+ * Tests for {@link PreferencesViewModel}: load/write round-trip, default application, and the PDF-libraries CSV encoding.
+ */
+public class PreferencesViewModelTest {
+
+    @Rule
+    public TemporaryFolder tmp = new TemporaryFolder();
+
+    private Properties bundledDefaults;
+
+    @Before
+    public void loadDefaults() throws IOException {
+        bundledDefaults = new Properties();
+        try (InputStream is = PreferencesViewModelTest.class
+                .getResourceAsStream("/net/sf/jsignpdf/conf/advanced.default.properties")) {
+            bundledDefaults.load(is);
+        }
+    }
+
+    @Test
+    public void loadFrom_appliesBundledDefaultsWhenUserFileEmpty() throws Exception {
+        Path file = tmp.newFolder().toPath().resolve("advanced.properties");
+        AdvancedConfig cfg = new AdvancedConfig(file, bundledDefaults);
+        PreferencesViewModel vm = new PreferencesViewModel();
+        vm.loadFrom(cfg);
+        assertEquals("", vm.fontPathProperty().get());
+        assertEquals("", vm.fontNameProperty().get());
+        assertEquals("", vm.fontEncodingProperty().get());
+        assertTrue(vm.checkValidityProperty().get());
+        assertTrue(vm.checkKeyUsageProperty().get());
+        assertFalse(vm.checkCriticalExtensionsProperty().get());
+        assertFalse(vm.relaxSslSecurityProperty().get());
+        assertEquals("SHA-256", vm.tsaHashAlgorithmProperty().get());
+        assertEquals("pdfbox,jpedal,openpdf", vm.encodePdfLibraries());
+    }
+
+    @Test
+    public void writeTo_emptyStringClearsKey() throws Exception {
+        Path file = tmp.newFolder().toPath().resolve("advanced.properties");
+        AdvancedConfig cfg = new AdvancedConfig(file, bundledDefaults);
+        cfg.setProperty("font.path", "/some/path");
+        PreferencesViewModel vm = new PreferencesViewModel();
+        vm.loadFrom(cfg);
+        // VM round-trips the value.
+        assertEquals("/some/path", vm.fontPathProperty().get());
+        // User clears the field.
+        vm.fontPathProperty().set("");
+        vm.writeTo(cfg);
+        // After writeTo, getProperty falls back to bundled default (empty string in advanced.default.properties).
+        assertFalse(cfg.hasUserOverride("font.path"));
+    }
+
+    @Test
+    public void encodePdfLibraries_default_isFullOrderedCsv() throws Exception {
+        PreferencesViewModel vm = new PreferencesViewModel();
+        Path file = tmp.newFolder().toPath().resolve("advanced.properties");
+        vm.loadFrom(new AdvancedConfig(file, bundledDefaults));
+        assertEquals("pdfbox,jpedal,openpdf", vm.encodePdfLibraries());
+    }
+
+    @Test
+    public void encodePdfLibraries_disabledLibsOmitted() {
+        PreferencesViewModel vm = new PreferencesViewModel();
+        vm.decodePdfLibraries("jpedal,pdfbox,openpdf");
+        vm.pdfLibOpenpdfProperty().set(false);
+        assertEquals("jpedal,pdfbox", vm.encodePdfLibraries());
+    }
+
+    @Test
+    public void decodeAndReencode_reflectsExplicitOrder() {
+        PreferencesViewModel vm = new PreferencesViewModel();
+        vm.decodePdfLibraries("openpdf,jpedal,pdfbox");
+        assertEquals("openpdf,jpedal,pdfbox", vm.encodePdfLibraries());
+    }
+
+    @Test
+    public void moveUpAndDown_reordersLibraries() {
+        PreferencesViewModel vm = new PreferencesViewModel();
+        vm.decodePdfLibraries("jpedal,pdfbox,openpdf");
+        vm.moveUp(PreferencesViewModel.LIB_OPENPDF);
+        assertEquals("jpedal,openpdf,pdfbox", vm.encodePdfLibraries());
+        vm.moveDown(PreferencesViewModel.LIB_JPEDAL);
+        assertEquals("openpdf,jpedal,pdfbox", vm.encodePdfLibraries());
+    }
+
+    @Test
+    public void pkcs11Profiles_roundTripBodyExactly() throws Exception {
+        String body = "name=JSignPdf\n  library = /usr/lib/lib.so  \nslot=1\n\n";
+        PreferencesViewModel vm = new PreferencesViewModel();
+        vm.loadPkcs11Profiles(List.of(new Pkcs11Profile("default", Path.of("pkcs11.cfg"), true, body)), id -> null);
+        assertEquals(1, vm.pkcs11Profiles().size());
+        Pkcs11Profiles.ProfileEdit edit = vm.pkcs11Edits().get(0);
+        assertEquals("default", edit.originalId());
+        assertEquals("default", edit.id());
+        assertEquals(body, edit.body());
+    }
+
+    @Test
+    public void pkcs11Draft_editsFieldsInBody() {
+        Pkcs11ProfileDraft d = new Pkcs11ProfileDraft(null, "token", "name=token\nslotListIndex=0\n", null);
+        d.setLabel("My token");
+        d.setProvider(ProviderMode.BOTH);
+        d.setLibrary("C:\\Program Files (x86)\\Vendor\\p11.dll");
+        assertEquals("My token", d.label());
+        assertEquals(ProviderMode.BOTH, d.provider());
+        assertEquals("C:/Program Files (x86)/Vendor/p11.dll", d.library());
+        assertTrue(d.body().startsWith("#jsignpdf:label=My token\n#jsignpdf:provider=both\nname=token\n"));
+        assertTrue(d.body().contains("library=\"C:/Program Files (x86)/Vendor/p11.dll\"\n"));
+    }
+
+    @Test
+    public void applyDefaults_loadsBundled() throws Exception {
+        Path file = tmp.newFolder().toPath().resolve("advanced.properties");
+        AdvancedConfig cfg = new AdvancedConfig(file, bundledDefaults);
+        cfg.setProperty("relax.ssl.security", true);
+        cfg.setProperty("tsa.hashAlgorithm", "SHA-1");
+        PreferencesViewModel vm = new PreferencesViewModel();
+        vm.loadFrom(cfg);
+        assertTrue(vm.relaxSslSecurityProperty().get());
+        assertEquals("SHA-1", vm.tsaHashAlgorithmProperty().get());
+        vm.applyDefaults(new AdvancedConfig(null, bundledDefaults));
+        assertFalse(vm.relaxSslSecurityProperty().get());
+        assertEquals("SHA-256", vm.tsaHashAlgorithmProperty().get());
+    }
+
+    @Test
+    public void debug_roundTripsAndResetsToDefault() throws Exception {
+        Path file = tmp.newFolder().toPath().resolve("advanced.properties");
+        AdvancedConfig cfg = new AdvancedConfig(file, bundledDefaults);
+        PreferencesViewModel vm = new PreferencesViewModel();
+
+        // Bundled default is off.
+        vm.loadFrom(cfg);
+        assertFalse(vm.debugProperty().get());
+
+        // Turn it on and persist; it must be written under the 'debug' key.
+        vm.debugProperty().set(true);
+        vm.writeTo(cfg);
+        assertTrue(cfg.getAsBool("debug", false));
+
+        // Reload picks the persisted value back up.
+        PreferencesViewModel reloaded = new PreferencesViewModel();
+        reloaded.loadFrom(cfg);
+        assertTrue(reloaded.debugProperty().get());
+
+        // Reset-to-defaults for the General tab clears it.
+        reloaded.applyGeneralDefaults(new AdvancedConfig(null, bundledDefaults));
+        assertFalse(reloaded.debugProperty().get());
+    }
+
+    @Test
+    public void outputSuffixTimestamp_roundTripsAndResetsToDefault() throws Exception {
+        Path file = tmp.newFolder().toPath().resolve("advanced.properties");
+        AdvancedConfig cfg = new AdvancedConfig(file, bundledDefaults);
+        PreferencesViewModel vm = new PreferencesViewModel();
+
+        // Bundled default.
+        vm.loadFrom(cfg);
+        assertEquals("_timestamped", vm.outputSuffixTimestampProperty().get());
+
+        // Change it and persist; it must be written under the 'output.suffix.timestamp' key.
+        vm.outputSuffixTimestampProperty().set("_ts");
+        vm.writeTo(cfg);
+        assertEquals("_ts", cfg.getProperty("output.suffix.timestamp"));
+
+        // Reload picks the persisted value back up.
+        PreferencesViewModel reloaded = new PreferencesViewModel();
+        reloaded.loadFrom(cfg);
+        assertEquals("_ts", reloaded.outputSuffixTimestampProperty().get());
+
+        // Reset-to-defaults for the General tab restores the bundled default.
+        reloaded.applyGeneralDefaults(new AdvancedConfig(null, bundledDefaults));
+        assertEquals("_timestamped", reloaded.outputSuffixTimestampProperty().get());
+    }
+
+    @Test
+    public void uiLanguage_roundTripsEmptyRemovesKeyAndResets() throws Exception {
+        Path file = tmp.newFolder().toPath().resolve("advanced.properties");
+        AdvancedConfig cfg = new AdvancedConfig(file, bundledDefaults);
+        PreferencesViewModel vm = new PreferencesViewModel();
+
+        // Bundled default is empty (follow the OS locale).
+        vm.loadFrom(cfg);
+        assertEquals("", vm.uiLanguageProperty().get());
+
+        // Set a language and persist under the 'ui.language' key.
+        vm.uiLanguageProperty().set("de");
+        vm.writeTo(cfg);
+        assertEquals("de", cfg.getProperty("ui.language"));
+        assertTrue(cfg.hasUserOverride("ui.language"));
+
+        // Reload picks the persisted value up.
+        PreferencesViewModel reloaded = new PreferencesViewModel();
+        reloaded.loadFrom(cfg);
+        assertEquals("de", reloaded.uiLanguageProperty().get());
+
+        // Clearing the field removes the user override (falls back to the empty bundled default).
+        reloaded.uiLanguageProperty().set("");
+        reloaded.writeTo(cfg);
+        assertFalse(cfg.hasUserOverride("ui.language"));
+
+        // Reset-to-defaults for the General tab also clears it.
+        reloaded.uiLanguageProperty().set("fr");
+        reloaded.applyGeneralDefaults(new AdvancedConfig(null, bundledDefaults));
+        assertEquals("", reloaded.uiLanguageProperty().get());
+    }
+
+    @Test
+    public void dssSystemStoreAndMra_roundTripAndReset() throws Exception {
+        Path file = tmp.newFolder().toPath().resolve("advanced.properties");
+        AdvancedConfig cfg = new AdvancedConfig(file, bundledDefaults);
+        cfg.setProperty("engine.dss.trust.systemStore", true);
+        cfg.setProperty("engine.dss.trust.lotlMraSupport", true);
+        PreferencesViewModel vm = new PreferencesViewModel();
+        vm.loadFrom(cfg);
+        assertTrue(vm.dssSystemStoreProperty().get());
+        assertTrue(vm.dssLotlMraSupportProperty().get());
+
+        vm.writeTo(cfg);
+        assertTrue(cfg.getAsBool("engine.dss.trust.systemStore", false));
+        assertTrue(cfg.getAsBool("engine.dss.trust.lotlMraSupport", false));
+
+        vm.applyDefaults(new AdvancedConfig(null, bundledDefaults));
+        assertFalse(vm.dssSystemStoreProperty().get());
+        assertFalse(vm.dssLotlMraSupportProperty().get());
+    }
+
+    @Test
+    public void validateFontPath_emptyOk_invalidNotOk() {
+        assertTrue(PreferencesValidation.validateFontPath(""));
+        assertTrue(PreferencesValidation.validateFontPath(null));
+        assertFalse(PreferencesValidation.validateFontPath("/no/such/path/should/exist/forsure"));
+    }
+
+    @Test
+    public void validatePdfLibSelection_atLeastOne() {
+        assertTrue(PreferencesValidation.validatePdfLibSelection(true, false, false));
+        assertTrue(PreferencesValidation.validatePdfLibSelection(false, true, true));
+        assertFalse(PreferencesValidation.validatePdfLibSelection(false, false, false));
+    }
+}

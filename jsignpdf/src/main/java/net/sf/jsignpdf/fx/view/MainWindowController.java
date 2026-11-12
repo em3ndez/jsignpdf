@@ -1,0 +1,1947 @@
+package net.sf.jsignpdf.fx.view;
+
+import java.io.File;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.logging.Level;
+
+import javafx.animation.PauseTransition;
+import javafx.application.Platform;
+import javafx.beans.binding.BooleanBinding;
+import javafx.beans.property.BooleanProperty;
+import javafx.beans.property.SimpleBooleanProperty;
+import javafx.fxml.FXML;
+import javafx.geometry.Insets;
+import javafx.scene.Node;
+import javafx.scene.control.Accordion;
+import javafx.scene.control.Alert;
+import javafx.scene.control.Button;
+import javafx.scene.control.ButtonBar;
+import javafx.css.PseudoClass;
+import javafx.scene.control.ButtonType;
+import javafx.scene.control.CheckMenuItem;
+import javafx.scene.control.TitledPane;
+import javafx.scene.control.ChoiceBox;
+import javafx.scene.control.ComboBox;
+import javafx.scene.control.ListCell;
+import javafx.scene.control.Dialog;
+import javafx.scene.control.TextInputDialog;
+import javafx.scene.control.Label;
+import javafx.scene.control.Menu;
+import javafx.scene.control.MenuItem;
+import javafx.scene.control.PasswordField;
+import javafx.scene.control.Tooltip;
+import javafx.scene.control.ProgressBar;
+import javafx.scene.control.ScrollPane;
+import javafx.scene.control.SeparatorMenuItem;
+import javafx.scene.control.SplitPane;
+import javafx.scene.control.TextField;
+import javafx.scene.control.ToggleButton;
+import javafx.scene.input.DragEvent;
+import javafx.scene.input.Dragboard;
+import javafx.scene.input.KeyCode;
+import javafx.scene.input.KeyEvent;
+import javafx.scene.input.TransferMode;
+import javafx.scene.layout.GridPane;
+import javafx.stage.Stage;
+import javafx.util.Duration;
+
+import net.sf.jsignpdf.fx.util.NativeFileChooser;
+import net.sf.jsignpdf.fx.util.NativeFileChooser.ExtensionFilter;
+import net.sf.jsignpdf.fx.util.Sandbox;
+
+import org.openpdf.text.exceptions.BadPasswordException;
+
+import net.sf.jsignpdf.BasicSignerOptions;
+import net.sf.jsignpdf.Constants;
+import net.sf.jsignpdf.PdfExtraInfo;
+import net.sf.jsignpdf.engine.Capability;
+import net.sf.jsignpdf.engine.DssLtTrustPreflight;
+import net.sf.jsignpdf.engine.EngineConfig;
+import net.sf.jsignpdf.engine.EngineRegistry;
+import net.sf.jsignpdf.engine.SigningEngine;
+import net.sf.jsignpdf.fx.EngineCapabilities;
+import net.sf.jsignpdf.utils.AdvancedConfig;
+import net.sf.jsignpdf.utils.AppConfig;
+import javafx.scene.layout.VBox;
+import javafx.util.StringConverter;
+import net.sf.jsignpdf.fx.control.PdfPageView;
+import net.sf.jsignpdf.fx.control.SignatureOverlay;
+import net.sf.jsignpdf.fx.control.SignaturePreviewStackPane;
+import net.sf.jsignpdf.fx.service.JpxCodecPrompt;
+import net.sf.jsignpdf.fx.service.PdfRenderService;
+import net.sf.jsignpdf.fx.service.RenderedPage;
+import net.sf.jsignpdf.fx.service.SigningService;
+import net.sf.jsignpdf.preview.JpxDetector;
+import net.sf.jsignpdf.preview.JpxPluginManager;
+import net.sf.jsignpdf.utils.ConfigLocationResolver;
+import net.sf.jsignpdf.fx.preferences.PreferencesController;
+import net.sf.jsignpdf.fx.preset.ManagePresetsDialog;
+import net.sf.jsignpdf.fx.preset.Preset;
+import net.sf.jsignpdf.fx.preset.PresetManager;
+import net.sf.jsignpdf.fx.preset.PresetValidation;
+import net.sf.jsignpdf.fx.util.RecentFilesManager;
+import net.sf.jsignpdf.fx.viewmodel.DocumentViewModel;
+import net.sf.jsignpdf.fx.viewmodel.SignaturePlacementViewModel;
+import net.sf.jsignpdf.fx.viewmodel.SigningOptionsViewModel;
+import net.sf.jsignpdf.fx.viewmodel.VisibleSignatureCoordinator;
+import net.sf.jsignpdf.types.PadesLevel;
+import net.sf.jsignpdf.types.PageInfo;
+import net.sf.jsignpdf.types.SignatureFieldInfo;
+import net.sf.jsignpdf.utils.PropertyProvider;
+import net.sf.jsignpdf.utils.PropertyStoreFactory;
+
+import static net.sf.jsignpdf.Constants.LOGGER;
+import static net.sf.jsignpdf.Constants.RES;
+
+/**
+ * Controller for the main application window.
+ */
+public class MainWindowController {
+
+    private static final String KEY_LAST_OPEN_DIR = "last.open.dir";
+    private static final String KEY_LAST_ZOOM = "last.zoom";
+    /**
+     * Styles the output-path label when the resolved output would overwrite the input (":warning" in CSS).
+     */
+    private static final PseudoClass WARNING_PSEUDO_CLASS = PseudoClass.getPseudoClass("warning");
+
+    private Stage stage;
+    private File lastOpenDir;
+    private double lastZoomLevel = 1.0;
+    /** Session-only flag: once the user skips the JPEG 2000 codec offer, don't re-ask until the next app run. */
+    private boolean jpxPromptSkipped = false;
+    private BasicSignerOptions options;
+    private final DocumentViewModel documentVM = new DocumentViewModel();
+    private final SigningOptionsViewModel signingVM = new SigningOptionsViewModel();
+    private final SignaturePlacementViewModel placementVM = new SignaturePlacementViewModel();
+    private final PdfRenderService renderService = new PdfRenderService();
+    private final SigningService signingService = new SigningService();
+    private final RecentFilesManager recentFilesManager = new RecentFilesManager();
+    private final PresetManager presetManager = new PresetManager();
+    private final EngineCapabilities engineCapabilities = new EngineCapabilities();
+    /** Existing signature field the signature goes into, or null when a new field is created. */
+    private SignatureFieldInfo selectedSigField;
+    /** Marker rectangle of {@link #selectedSigField}, relative to the displayed page (see PdfExtraInfo). */
+    private float[] selectedSigFieldMarker;
+    /**
+     * Marker rectangles of the document's unsigned signature fields, relative to their own page.
+     */
+    private final Map<SignatureFieldInfo, float[]> blankSigFieldMarkers = new LinkedHashMap<>();
+    /** Mirrors {@link #selectedSigField} for the bindings that lock the visible-signature toggles. */
+    private final BooleanProperty sigFieldSelected = new SimpleBooleanProperty(false);
+    /** True while no document is loaded, i.e. there is nothing to place a visible signature on. */
+    private final BooleanProperty noDocument = new SimpleBooleanProperty(true);
+    /** True while the running background operation is a document timestamp rather than a signature. */
+    private boolean timestampRun;
+    /** Output file of the running document timestamp, for the completion message. */
+    private String timestampOutFile;
+    private PdfPageView pdfPageView;
+    private SignatureOverlay signatureOverlay;
+    /** Holds the side panel node while it's detached from the SplitPane (hidden). */
+    private Node detachedSidePanel;
+    private PauseTransition shiftHintTimer;
+
+    // Included sub-controllers (fx:id + "Controller" naming convention)
+    @FXML private VBox certificateSettings;
+    @FXML private CertificateSettingsController certificateSettingsController;
+    @FXML private VBox signatureProperties;
+    @FXML private SignaturePropertiesController signaturePropertiesController;
+    @FXML private VBox signatureSettings;
+    @FXML private SignatureSettingsController signatureSettingsController;
+    @FXML private VBox tsaSettings;
+    @FXML private TsaSettingsController tsaSettingsController;
+    @FXML private VBox encryptionSettings;
+    @FXML private EncryptionSettingsController encryptionSettingsController;
+    @FXML private VBox outputConsole;
+    @FXML private OutputConsoleController outputConsoleController;
+
+    // Menu items
+    @FXML private MenuItem menuOpen;
+    @FXML private MenuItem menuClose;
+    @FXML private MenuItem menuSaveAs;
+    @FXML private Menu menuRecentFiles;
+    @FXML private CheckMenuItem menuVisibleSig;
+    @FXML private MenuItem menuSign;
+    @FXML private MenuItem menuExit;
+    @FXML private MenuItem menuZoomIn;
+    @FXML private MenuItem menuZoomOut;
+    @FXML private MenuItem menuZoomFit;
+    @FXML private MenuItem menuToggleSidePanel;
+    @FXML private MenuItem menuResetSettings;
+    @FXML private MenuItem menuSavePresetAsNew;
+    @FXML private MenuItem menuManagePresets;
+    @FXML private MenuItem menuPreferences;
+    @FXML private MenuItem menuAbout;
+
+    // Toolbar
+    @FXML private Button btnOpen;
+    @FXML private Button btnZoomIn;
+    @FXML private Button btnZoomOut;
+    @FXML private Button btnZoomFit;
+    @FXML private ComboBox<String> cmbZoom;
+    @FXML private Button btnPrevPage;
+    @FXML private TextField txtPageNumber;
+    @FXML private Label lblPageCount;
+    @FXML private Button btnNextPage;
+    @FXML private ToggleButton btnVisibleSig;
+    @FXML private ToggleButton btnTsa;
+    @FXML private Label lblPadesLevel;
+    @FXML private ChoiceBox<PadesLevel> cmbPadesLevel;
+    @FXML private ComboBox<Preset> cmbPresets;
+    @FXML private Button btnSign;
+
+    // Content area
+    @FXML private SplitPane splitPane;
+    @FXML private Accordion sidePanelAccordion;
+    @FXML private TitledPane padesLevelAccordionPane;
+    @FXML private TitledPane signatureAppearanceAccordionPane;
+    @FXML private TitledPane tsaAccordionPane;
+    @FXML private TitledPane encryptionAccordionPane;
+    @FXML private Button btnTimestamp;
+    @FXML private MenuItem menuTimestamp;
+    @FXML private ScrollPane scrollPane;
+    @FXML private SignaturePreviewStackPane pdfArea;
+    @FXML private Label lblDropHint;
+
+    // Status bar
+    @FXML private Label lblStatus;
+    @FXML private Label lblSigStateBadge;
+    @FXML private Label lblSigCoords;
+    @FXML private Label lblOutputPath;
+    @FXML private ProgressBar progressBar;
+
+    public void setStage(Stage stage) {
+        this.stage = stage;
+        stage.addEventFilter(KeyEvent.KEY_PRESSED, this::handleKeyPress);
+    }
+
+    /**
+     * Initializes the UI from persisted BasicSignerOptions (called after loadOptions()).
+     * Populates all ViewModel properties from the options so the UI is prefilled.
+     */
+    public void initFromOptions(BasicSignerOptions opts) {
+        this.options = opts;
+        signingVM.syncFromOptions(opts);
+
+        // The output file name is session state: the persisted one names the document signed last time, so it is
+        // dropped (unlike the output directory and the suffix, which are settings) and every run starts derived.
+        opts.setOutFile(null);
+        signingVM.outBaseNameProperty().set(null);
+        resolveOutputFile();
+
+        // No document is loaded at startup, so the visible-signature toggle must
+        // start disabled. The persisted position coordinates on signingVM are
+        // preserved so we can auto-place at the last-known location once a
+        // document is opened and the user re-enables it.
+        signingVM.visibleProperty().set(false);
+    }
+
+    /**
+     * Stores current UI state to BasicSignerOptions and persists to disk.
+     * Called on window close and on File -> Exit.
+     */
+    public void storeAndCleanup() {
+        saveViewStateToConfig();
+        try {
+            if (options == null) {
+                options = new BasicSignerOptions();
+            }
+
+            flushUiToViewModel();
+            signingVM.syncToOptions(options);
+            options.storeOptions();
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "Failed to store options", e);
+        }
+        if (outputConsoleController != null) {
+            outputConsoleController.dispose();
+        }
+    }
+
+    @FXML
+    private void initialize() {
+        // Wire sub-controllers
+        if (certificateSettingsController != null) {
+            certificateSettingsController.setViewModel(signingVM);
+        }
+        if (signaturePropertiesController != null) {
+            signaturePropertiesController.setViewModel(signingVM);
+        }
+        if (signatureSettingsController != null) {
+            signatureSettingsController.setViewModel(signingVM);
+        }
+        if (tsaSettingsController != null) {
+            tsaSettingsController.setViewModel(signingVM);
+        }
+        if (encryptionSettingsController != null) {
+            encryptionSettingsController.setViewModel(signingVM);
+        }
+
+        // Setup PDF page view and signature overlay
+        pdfPageView = new PdfPageView();
+        pdfPageView.setVisible(false);
+        signatureOverlay = new SignatureOverlay(placementVM);
+        signatureOverlay.setVisible(false);
+        signatureOverlay.setMouseTransparent(false);
+        signatureOverlay.setOnReplaceBlocked(this::showShiftHint);
+        pdfArea.getChildren().add(0, pdfPageView);
+        pdfArea.getChildren().add(1, signatureOverlay);
+        pdfArea.installPreview(signingVM, placementVM, signatureOverlay);
+
+        // Bind pdfArea min size to pdfPageView so scrollbars appear when the page
+        // exceeds the viewport. With fitToWidth/fitToHeight on the ScrollPane, the
+        // StackPane expands to fill the viewport (centering children) but minSize
+        // prevents it from shrinking below the rendered page, triggering scrollbars.
+        pdfArea.minWidthProperty().bind(pdfPageView.prefWidthProperty());
+        pdfArea.minHeightProperty().bind(pdfPageView.prefHeightProperty());
+
+        // Auto-enable visible signature when a rectangle is placed
+        placementVM.placedProperty().addListener((obs, wasPlaced, isPlaced) -> {
+            if (isPlaced) {
+                signingVM.visibleProperty().set(true);
+            }
+            updateStatusWithHint();
+            updateSigCoordsBadge();
+        });
+
+        // Keep coords badge in sync as the rectangle is moved or resized
+        Runnable syncCoordsFromPlacement = () -> {
+            capturePlacementToSigningVM();
+            updateSigCoordsBadge();
+        };
+        placementVM.relXProperty().addListener((obs, o, n) -> syncCoordsFromPlacement.run());
+        placementVM.relYProperty().addListener((obs, o, n) -> syncCoordsFromPlacement.run());
+        placementVM.relWidthProperty().addListener((obs, o, n) -> syncCoordsFromPlacement.run());
+        placementVM.relHeightProperty().addListener((obs, o, n) -> syncCoordsFromPlacement.run());
+
+        // React to visible-signature state changes:
+        //  - disabled: clear the placement rectangle
+        //  - enabled:  auto-place at last-known PDF coordinates (or safe default)
+        //              if no rectangle is already placed (e.g. via drag)
+        signingVM.visibleProperty().addListener((obs, wasVisible, isVisible) -> {
+            if (!isVisible) {
+                placementVM.reset();
+            } else {
+                autoPlaceVisibleSignature();
+            }
+            updateSigStateBadge();
+        });
+
+        // Bind the visible-signature controls (CheckMenuItem + toolbar toggle)
+        // bidirectionally to the ViewModel so they mirror the side-panel checkbox.
+        menuVisibleSig.selectedProperty().bindBidirectional(signingVM.visibleProperty());
+        btnVisibleSig.selectedProperty().bindBidirectional(signingVM.visibleProperty());
+        btnTsa.selectedProperty().bindBidirectional(signingVM.tsaEnabledProperty());
+
+        // Signing into an existing field always draws the appearance into that field's rectangle - SignerLogic
+        // forces visible=true for it regardless of this flag - so the menu item and the toolbar toggle lock
+        // together with the side-panel checkbox. Left switchable they would only make the UI disagree with the
+        // signature that comes out. "(create new field)" is the way back to an invisible signature.
+        menuVisibleSig.disableProperty().bind(noDocument.or(sigFieldSelected));
+        btnVisibleSig.disableProperty().bind(noDocument.or(sigFieldSelected));
+
+        // When TSA is turned on but no URL is configured yet, jump the side-panel
+        // accordion to the TSA section so the user can fill the required field.
+        signingVM.tsaEnabledProperty().addListener((obs, was, on) -> {
+            if (on && isBlank(signingVM.tsaUrlProperty().get())) {
+                expandTsaPane();
+            }
+        });
+
+        // Status-bar badge: visible whenever a document is loaded. Its text and
+        // colour swap based on whether visible signature is on or off.
+        lblSigStateBadge.managedProperty().bind(lblSigStateBadge.visibleProperty());
+        lblSigStateBadge.visibleProperty().bind(documentVM.documentLoadedProperty());
+
+        // Coords badge: managed tracks visible so it takes no space when hidden
+        lblSigCoords.managedProperty().bind(lblSigCoords.visibleProperty());
+
+        // Status-bar output path label: visible when a document is loaded
+        lblOutputPath.managedProperty().bind(lblOutputPath.visibleProperty());
+        signingVM.outFileProperty().addListener((obs, oldVal, newVal) -> updateOutputPathLabel());
+        documentVM.documentFileProperty().addListener((obs, oldVal, newVal) -> {
+            resolveOutputFile();
+            updateOutputPathLabel();
+        });
+        signingVM.outSuffixProperty().addListener((obs, oldVal, newVal) -> resolveOutputFile());
+        signingVM.outPathProperty().addListener((obs, oldVal, newVal) -> resolveOutputFile());
+        signingVM.outBaseNameProperty().addListener((obs, oldVal, newVal) -> resolveOutputFile());
+
+        // Initial state for the visible-signature controls.
+        // The badge's initial text and style come from FXML (correct for
+        // visibleProperty=false on startup); listeners take over on state changes.
+        updateOutputPathLabel();
+
+        // Keep overlay sized to match the pdf page view
+        signatureOverlay.prefWidthProperty().bind(pdfPageView.prefWidthProperty());
+        signatureOverlay.prefHeightProperty().bind(pdfPageView.prefHeightProperty());
+        signatureOverlay.minWidthProperty().bind(pdfPageView.minWidthProperty());
+        signatureOverlay.minHeightProperty().bind(pdfPageView.minHeightProperty());
+        signatureOverlay.maxWidthProperty().bind(pdfPageView.maxWidthProperty());
+        signatureOverlay.maxHeightProperty().bind(pdfPageView.maxHeightProperty());
+
+        progressBar.setVisible(false);
+        updateStatus(RES.get("jfx.gui.status.ready"));
+        loadPersistedViewState();
+
+        cmbZoom.getItems().addAll("50%", "75%", "100%", "125%", "150%", "200%");
+        cmbZoom.setValue("100%");
+
+        // Disable controls that require a loaded document
+        setDocumentControlsDisabled(true);
+
+        // Bind PDF page view to ViewModel
+        pdfPageView.pageImageProperty().bind(documentVM.currentPageImageProperty());
+        pdfPageView.zoomLevelProperty().bind(documentVM.zoomLevelProperty());
+        pdfPageView.renderDpiProperty().bind(documentVM.renderDpiProperty());
+
+        // Listen for page changes to trigger re-render
+        documentVM.currentPageProperty().addListener((obs, oldVal, newVal) -> {
+            txtPageNumber.setText(String.valueOf(newVal.intValue()));
+            renderCurrentPage();
+            updateNavButtonState();
+            capturePlacementToSigningVM();
+            updateSigCoordsBadge();
+            updateFieldHighlight(selectedSigField);
+            updateBlankFieldMarkers();
+        });
+
+        // Zoom combo box changes
+        cmbZoom.setOnAction(e -> {
+            String val = cmbZoom.getValue();
+            if (val != null) {
+                try {
+                    double zoom = Double.parseDouble(val.replace("%", "").trim()) / 100.0;
+                    documentVM.setZoomLevel(zoom);
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        });
+
+        // Zoom level changes update combo and remember the last zoom (persisted on document open / exit)
+        documentVM.zoomLevelProperty().addListener((obs, oldVal, newVal) -> {
+            // Only track a real user zoom; ignore the reset-to-1.0 that documentVM.reset() fires on close.
+            if (documentVM.isDocumentLoaded()) {
+                lastZoomLevel = newVal.doubleValue();
+            }
+            String formatted = Math.round(newVal.doubleValue() * 100) + "%";
+            if (!formatted.equals(cmbZoom.getValue())) {
+                cmbZoom.setValue(formatted);
+            }
+        });
+
+        // Page number text field commit
+        txtPageNumber.setOnAction(e -> {
+            try {
+                int page = Integer.parseInt(txtPageNumber.getText().trim());
+                documentVM.setCurrentPage(page);
+            } catch (NumberFormatException ignored) {
+                txtPageNumber.setText(String.valueOf(documentVM.getCurrentPage()));
+            }
+        });
+
+        // Setup render service callbacks
+        renderService.setOnSucceeded(e -> {
+            RenderedPage rendered = renderService.getValue();
+            documentVM.setRenderDpi(rendered.dpi());
+            documentVM.setCurrentPageImage(rendered.image());
+            pdfPageView.setVisible(true);
+            progressBar.setVisible(false);
+            updateStatusForDocument();
+        });
+        renderService.setOnFailed(e -> {
+            LOGGER.log(Level.WARNING, "Failed to render page", renderService.getException());
+            progressBar.setVisible(false);
+            updateStatus(RES.get("jfx.gui.status.renderError"));
+        });
+
+        // Signing service callbacks
+        signingService.setOnSucceeded(e -> {
+            progressBar.setVisible(false);
+            boolean success = signingService.getValue();
+            if (success) {
+                updateStatus(RES.get(timestampRun ? "jfx.gui.status.timestampOk" : "jfx.gui.status.signingOk"));
+                showAlert(Alert.AlertType.INFORMATION,
+                        RES.get(timestampRun ? "jfx.gui.dialog.timestampComplete.title"
+                                : "jfx.gui.dialog.signingComplete.title"),
+                        timestampRun ? RES.get("jfx.gui.dialog.timestampComplete.text", timestampOutFile)
+                                : RES.get("jfx.gui.dialog.signingComplete.text"));
+            } else {
+                updateStatus(RES.get(timestampRun ? "jfx.gui.status.timestampFailed"
+                        : "jfx.gui.status.signingFailed"));
+                showAlert(Alert.AlertType.ERROR,
+                        RES.get(timestampRun ? "jfx.gui.dialog.timestampFailed.title"
+                                : "jfx.gui.dialog.signingFailed.title"),
+                        RES.get(timestampRun ? "jfx.gui.dialog.timestampFailed.text"
+                                : "jfx.gui.dialog.signingFailed.text"));
+            }
+        });
+        signingService.setOnFailed(e -> {
+            progressBar.setVisible(false);
+            LOGGER.log(Level.SEVERE, "Signing service error", signingService.getException());
+            updateStatus(RES.get("jfx.gui.status.signingFailed") + ": "
+                    + signingService.getException().getMessage());
+            showAlert(Alert.AlertType.ERROR,
+                    RES.get("jfx.gui.dialog.signingError.title"),
+                    signingService.getException().getMessage());
+        });
+
+        refreshRecentFilesMenu();
+        setupPresetCombo();
+        setupEngineCapabilityGating();
+    }
+
+    /**
+     * Drives the capability-based control gating off the active signing engine. The engine itself is now
+     * selected in File &gt; Preferences (persisted to the {@code engine=} key in {@code advanced.properties});
+     * this method seeds {@link EngineCapabilities} from that persisted value at startup and wires the
+     * capability-driven disabling of toolbar buttons and accordion sections. {@link #onPreferences()}
+     * refreshes the active engine after the dialog closes so switching it takes effect without a restart.
+     */
+    private void setupEngineCapabilityGating() {
+        final EngineRegistry registry = EngineRegistry.getInstance();
+        SigningEngine current = registry.findById(AppConfig.defaultEngineId())
+                .or(registry::getDefault).orElse(null);
+        engineCapabilities.activeEngineProperty().set(current);
+
+        // Capability-driven section gating at the umbrella (accordion-pane) granularity. These panes
+        // are not governed by the document-loaded disable logic, so binding their disableProperty here
+        // is safe. (With OpenPDF — the only engine in phase 1 — every capability is present, so nothing
+        // is disabled; the wiring exists for reduced-capability engines added in phase 2.)
+        engineCapabilities.gate(btnTsa, Capability.TSA);
+        // A document timestamp needs both a loaded document and an engine that can append one. Bound as a
+        // single expression, because setDocumentControlsDisabled assigns disableProperty imperatively and a
+        // control cannot be both bound and set.
+        final BooleanBinding timestampDisabled = engineCapabilities.unsupported(Capability.DOC_TIMESTAMP)
+                .or(noDocument);
+        engineCapabilities.gate(btnTimestamp, timestampDisabled, Capability.DOC_TIMESTAMP);
+        menuTimestamp.disableProperty().bind(timestampDisabled);
+        setupPadesLevelSelector();
+        if (padesLevelAccordionPane != null) {
+            engineCapabilities.gate(padesLevelAccordionPane, Capability.PADES_BASELINE_B);
+        }
+        if (signatureAppearanceAccordionPane != null) {
+            engineCapabilities.gate(signatureAppearanceAccordionPane, Capability.VISIBLE_SIGNATURE);
+        }
+        if (tsaAccordionPane != null) {
+            engineCapabilities.gate(tsaAccordionPane, Capability.TSA);
+        }
+        if (encryptionAccordionPane != null) {
+            engineCapabilities.gate(encryptionAccordionPane, Capability.ENCRYPTION_PASSWORD,
+                    Capability.ENCRYPTION_CERTIFICATE);
+        }
+
+        // Field-level gating for controls that live inside side-panel sub-controllers. The append toggle
+        // is the first of these: an engine without OVERWRITE_MODE (DSS) always appends, so the checkbox is
+        // forced on and disabled there.
+        if (signaturePropertiesController != null) {
+            signaturePropertiesController.gateCapabilities(engineCapabilities);
+        }
+        if (signatureSettingsController != null) {
+            signatureSettingsController.gateSigFieldCombo(
+                    engineCapabilities.unsupported(Capability.SIGN_EXISTING_FIELD));
+            signatureSettingsController.setOnSigFieldSelected(this::onSigFieldSelected);
+        }
+
+        // TODO(phase-2): field-level capability gating is still missing for the remaining sub-controller
+        // controls that carry their own disable logic — hash algorithm, certification level, render-mode
+        // items, permission checkboxes, proxy fields, and the PKCS#11/CloudFoxy keystore-type items (see
+        // the control->capability table in design-doc/3.1-signing-engines.md). The CLI path is already
+        // comprehensive via EngineMismatchValidator, which is the authoritative table to mirror here.
+    }
+
+    /**
+     * Populates and gates the PAdES-level dropdown. The control is bound to the signing ViewModel's
+     * {@code padesLevel} property and gated as a unit on {@link Capability#PADES_BASELINE_B}: an engine
+     * that cannot produce even B is not a PAdES engine, so the dropdown disables/greys for OpenPDF and
+     * enables for DSS. The level defaults to {@link PadesLevel#BASELINE_B} for PAdES engines (so the
+     * dropdown isn't empty) and is cleared for non-PAdES engines (a stale level would otherwise trip the
+     * {@link EngineMismatchValidator}).
+     */
+    private void setupPadesLevelSelector() {
+        if (cmbPadesLevel == null) {
+            return;
+        }
+        cmbPadesLevel.getItems().setAll(PadesLevel.values());
+        cmbPadesLevel.setConverter(new StringConverter<PadesLevel>() {
+            @Override
+            public String toString(PadesLevel level) {
+                return level == null ? "" : level.shortName();
+            }
+
+            @Override
+            public PadesLevel fromString(String s) {
+                return PadesLevel.fromString(s);
+            }
+        });
+        cmbPadesLevel.valueProperty().bindBidirectional(signingVM.padesLevelProperty());
+        engineCapabilities.gate(cmbPadesLevel, Capability.PADES_BASELINE_B);
+        if (lblPadesLevel != null) {
+            engineCapabilities.gate(lblPadesLevel, Capability.PADES_BASELINE_B);
+        }
+
+        // Seed a sensible default for the current engine and keep it in step when the engine changes.
+        applyPadesLevelDefaultForEngine(engineCapabilities.activeEngineProperty().get());
+        engineCapabilities.activeEngineProperty().addListener(
+                (obs, oldEngine, newEngine) -> applyPadesLevelDefaultForEngine(newEngine));
+        // Re-apply the engine-appropriate value whenever the level is changed by an options/preset load or
+        // a reset (those call syncFromOptions/resetToDefaults). This keeps the dropdown from going empty
+        // while a PAdES engine is active, and clears a stale level loaded under a non-PAdES engine (which
+        // would otherwise trip the EngineMismatchValidator at sign time).
+        signingVM.padesLevelProperty().addListener((obs, oldLevel, newLevel) ->
+                applyPadesLevelDefaultForEngine(engineCapabilities.activeEngineProperty().get()));
+    }
+
+    /**
+     * Picks the PAdES level appropriate for the given engine: {@link PadesLevel#BASELINE_B} as a non-empty
+     * default when the engine is PAdES-capable and no level is set yet, or {@code null} when the engine is
+     * not PAdES-capable (OpenPDF) so the level can't reach the engine mismatch validator. An explicit
+     * user choice (e.g. LT/LTA) is preserved while a PAdES engine stays active.
+     */
+    private void applyPadesLevelDefaultForEngine(SigningEngine engine) {
+        boolean padesCapable = engine != null
+                && engine.capabilities().contains(Capability.PADES_BASELINE_B);
+        if (padesCapable) {
+            if (signingVM.padesLevelProperty().get() == null) {
+                signingVM.padesLevelProperty().set(PadesLevel.BASELINE_B);
+            }
+        } else if (signingVM.padesLevelProperty().get() != null) {
+            signingVM.padesLevelProperty().set(null);
+        }
+    }
+
+    private void setupPresetCombo() {
+        cmbPresets.setItems(presetManager.getPresets());
+        // JavaFX doesn't restore promptText in the button cell after clearSelection()+setValue(null);
+        // a custom button cell fixes that by reading the current promptText when item is null.
+        cmbPresets.setButtonCell(new ListCell<>() {
+            @Override
+            protected void updateItem(Preset item, boolean empty) {
+                super.updateItem(item, empty);
+                setText(item != null ? item.toString() : cmbPresets.getPromptText());
+            }
+        });
+        updatePresetComboState();
+        presetManager.getPresets().addListener((javafx.collections.ListChangeListener<Preset>) c -> updatePresetComboState());
+        cmbPresets.getSelectionModel().selectedItemProperty().addListener((obs, oldP, newP) -> {
+            if (newP == null) {
+                return;
+            }
+            Preset toLoad = newP;
+            // Run the actual load after the selection event finishes — JavaFX doesn't like mutating
+            // the combo's selection from inside its own change listener.
+            Platform.runLater(() -> {
+                loadPreset(toLoad);
+                cmbPresets.getSelectionModel().clearSelection();
+                cmbPresets.setValue(null);
+            });
+        });
+    }
+
+    private void updatePresetComboState() {
+        boolean empty = presetManager.getPresets().isEmpty();
+        cmbPresets.setDisable(empty);
+        cmbPresets.setPromptText(RES.get(empty
+                ? "jfx.gui.preset.placeholder.empty"
+                : "jfx.gui.preset.placeholder"));
+    }
+
+    private void loadPreset(Preset preset) {
+        if (options == null) {
+            options = new BasicSignerOptions();
+        }
+        // Flush any pending edits so that "load" is clearly "replace current".
+        flushUiToViewModel();
+        signingVM.syncToOptions(options);
+        presetManager.load(preset, options);
+        reloadFromOptionsKeepingOutputName();
+        // Move the on-screen rectangle to match the preset's position.
+        applySigningVMPositionToPlacement();
+        updateStatus(java.text.MessageFormat.format(
+                RES.get("jfx.gui.status.presetLoaded"), preset.getDisplayName()));
+    }
+
+    /**
+     * Flushes the UI state that is not bound to the view model - the placement rectangle and the
+     * text fields that commit on Enter or focus loss - so that a following syncToOptions() persists
+     * what is on screen.
+     */
+    private void flushUiToViewModel() {
+        if (signatureSettingsController != null) {
+            signatureSettingsController.commitPendingEdits();
+        }
+        if (tsaSettingsController != null) {
+            tsaSettingsController.commitPendingEdits();
+        }
+        capturePlacementToSigningVM();
+    }
+
+    /**
+     * Writes the current placement rectangle to the signing VM (as PDF coords) if one is placed and a document is loaded.
+     * Called before saving to preset, storing the main config, and signing.
+     */
+    private void capturePlacementToSigningVM() {
+        if (!placementVM.isPlaced() || !documentVM.isDocumentLoaded() || options == null) {
+            return;
+        }
+        PageInfo pageInfo = new PdfExtraInfo(options).getPageInfo(documentVM.getCurrentPage());
+        if (pageInfo == null) {
+            return;
+        }
+        VisibleSignatureCoordinator.pushPlacementToSigning(placementVM, signingVM,
+                documentVM.getCurrentPage(), pageInfo.getWidth(), pageInfo.getHeight());
+    }
+
+    /**
+     * Moves the on-screen placement rectangle to match the coordinates currently held by the signing VM. Used right after
+     * loading a preset, so the canvas reflects the new position even if {@code visible} hasn't toggled.
+     */
+    private void applySigningVMPositionToPlacement() {
+        if (!documentVM.isDocumentLoaded() || options == null) {
+            return;
+        }
+        PageInfo pageInfo = new PdfExtraInfo(options).getPageInfo(documentVM.getCurrentPage());
+        if (pageInfo == null) {
+            return;
+        }
+        VisibleSignatureCoordinator.pushSigningToPlacement(signingVM, placementVM,
+                pageInfo.getWidth(), pageInfo.getHeight());
+    }
+
+    @FXML
+    private void onSavePresetAsNew() {
+        if (options == null) {
+            options = new BasicSignerOptions();
+        }
+        flushUiToViewModel();
+        signingVM.syncToOptions(options);
+
+        TextInputDialog dialog = new TextInputDialog();
+        dialog.setTitle(RES.get("jfx.gui.preset.dialog.saveAsNew.title"));
+        dialog.setHeaderText(RES.get("jfx.gui.preset.dialog.saveAsNew.header"));
+        dialog.setContentText(RES.get("jfx.gui.preset.dialog.saveAsNew.prompt"));
+        dialog.initOwner(stage);
+
+        while (true) {
+            Optional<String> result = dialog.showAndWait();
+            if (result.isEmpty()) {
+                return;
+            }
+            String name = result.get();
+            PresetValidation.Result validation = PresetValidation.validate(name, presetManager::hasDisplayName);
+            if (validation != PresetValidation.Result.OK) {
+                showAlert(Alert.AlertType.ERROR,
+                        RES.get("jfx.gui.preset.dialog.saveAsNew.title"),
+                        validationMessage(validation));
+                dialog.getEditor().setText(PresetValidation.trim(name));
+                continue;
+            }
+            Preset saved = presetManager.saveAsNew(options, PresetValidation.trim(name));
+            updateStatus(java.text.MessageFormat.format(
+                    RES.get("jfx.gui.status.presetSaved"), saved.getDisplayName()));
+            return;
+        }
+    }
+
+    @FXML
+    private void onManagePresets() {
+        if (options == null) {
+            options = new BasicSignerOptions();
+        }
+        flushUiToViewModel();
+        signingVM.syncToOptions(options);
+        ManagePresetsDialog dialog = new ManagePresetsDialog(presetManager, options, stage);
+        dialog.showAndWait();
+    }
+
+    @FXML
+    private void onPreferences() {
+        boolean saved = PreferencesController.show(stage);
+        if (saved) {
+            // The engine may have been changed in Preferences. Re-seed the capability bindings from the
+            // persisted value so toolbar buttons and accordion sections re-gate immediately (no restart).
+            refreshActiveEngineFromConfig();
+            signaturePropertiesController.refreshDefaultSuffix();
+            certificateSettingsController.refreshKeystoreChoices();
+            tsaSettingsController.refreshKeystoreTypes();
+            resolveOutputFile();
+        }
+    }
+
+    /**
+     * Re-seeds {@link EngineCapabilities#activeEngineProperty()} from the engine persisted in
+     * {@code advanced.properties}, so capability gating (and the PAdES-level default) re-evaluates after
+     * the engine changes via Preferences or a settings reset.
+     */
+    private void refreshActiveEngineFromConfig() {
+        EngineRegistry registry = EngineRegistry.getInstance();
+        registry.findById(AppConfig.defaultEngineId()).or(registry::getDefault)
+                .ifPresent(e -> engineCapabilities.activeEngineProperty().set(e));
+    }
+
+    private String validationMessage(PresetValidation.Result result) {
+        switch (result) {
+            case EMPTY: return RES.get("jfx.gui.preset.validation.empty");
+            case ILLEGAL_CHAR: return RES.get("jfx.gui.preset.validation.illegalChar");
+            case TOO_LONG: return RES.get("jfx.gui.preset.validation.tooLong");
+            case DUPLICATE: return RES.get("jfx.gui.preset.validation.duplicate");
+            default: return "";
+        }
+    }
+
+    private void refreshRecentFilesMenu() {
+        menuRecentFiles.getItems().clear();
+        List<String> recentFiles = recentFilesManager.getRecentFiles();
+        if (recentFiles.isEmpty()) {
+            MenuItem empty = new MenuItem(RES.get("jfx.gui.menu.file.recentFiles.empty"));
+            empty.setDisable(true);
+            menuRecentFiles.getItems().add(empty);
+        } else {
+            for (String path : recentFiles) {
+                MenuItem item = new MenuItem(path);
+                item.setMnemonicParsing(false);
+                item.setOnAction(e -> openDocument(new File(path)));
+                menuRecentFiles.getItems().add(item);
+            }
+            menuRecentFiles.getItems().add(new SeparatorMenuItem());
+            MenuItem clear = new MenuItem(RES.get("jfx.gui.menu.file.recentFiles.clear"));
+            clear.setOnAction(e -> {
+                recentFilesManager.clear();
+                refreshRecentFilesMenu();
+            });
+            menuRecentFiles.getItems().add(clear);
+        }
+    }
+
+    private void setDocumentControlsDisabled(boolean disabled) {
+        btnZoomIn.setDisable(disabled);
+        btnZoomOut.setDisable(disabled);
+        btnZoomFit.setDisable(disabled);
+        cmbZoom.setDisable(disabled);
+        btnPrevPage.setDisable(disabled);
+        txtPageNumber.setDisable(disabled);
+        btnNextPage.setDisable(disabled);
+        btnSign.setDisable(disabled);
+        menuSign.setDisable(disabled);
+        menuClose.setDisable(disabled);
+        menuSaveAs.setDisable(disabled);
+        menuZoomIn.setDisable(disabled);
+        menuZoomOut.setDisable(disabled);
+        menuZoomFit.setDisable(disabled);
+        // The visible-signature toggles (menu item + toolbar button) are bound to this property instead of being
+        // disabled here, so that a selected signature field can lock them as well.
+        noDocument.set(disabled);
+        if (signatureSettingsController != null) {
+            signatureSettingsController.setVisibleSigCheckBoxDisabled(disabled);
+        }
+    }
+
+    /**
+     * Updates the status-bar badge that reflects whether the visible signature
+     * is currently enabled. The badge swaps between two distinct styles so the
+     * state is always obvious at a glance when a document is loaded.
+     */
+    private void updateSigStateBadge() {
+        if (lblSigStateBadge == null) return;
+        boolean on = signingVM.visibleProperty().get();
+        lblSigStateBadge.setText(on
+                ? RES.get("jfx.gui.status.visibleSigEnabled")
+                : RES.get("jfx.gui.status.invisibleSig"));
+        lblSigStateBadge.getStyleClass().removeAll("visible-sig-badge", "invisible-sig-badge");
+        lblSigStateBadge.getStyleClass().add(on ? "visible-sig-badge" : "invisible-sig-badge");
+        updateSigCoordsBadge();
+    }
+
+    private void updateSigCoordsBadge() {
+        if (lblSigCoords == null) return;
+        boolean show = signingVM.visibleProperty().get()
+                    && documentVM.documentLoadedProperty().get()
+                    && placementVM.isPlaced();
+        lblSigCoords.setVisible(show);
+        if (show) {
+            lblSigCoords.setText(String.format("(%d, %d) — (%d, %d)",
+                    Math.round(signingVM.positionLLXProperty().get()),
+                    Math.round(signingVM.positionLLYProperty().get()),
+                    Math.round(signingVM.positionURXProperty().get()),
+                    Math.round(signingVM.positionURYProperty().get())));
+        }
+    }
+
+    /**
+     * Auto-places the signature rectangle when the user enables visible
+     * signature without dragging a rectangle first. Prefers the last-known PDF
+     * coordinates persisted in the ViewModel — if they form a valid rectangle
+     * that fits the current page — and falls back to a safe bottom-right
+     * default otherwise. Always re-targets the current page.
+     * <p>
+     * Does nothing while an existing signature field is selected: that field's own {@code /Rect} decides where the
+     * signature goes, so a placement rectangle would only promise a position the signing path ignores.
+     */
+    private void autoPlaceVisibleSignature() {
+        if (!documentVM.isDocumentLoaded() || placementVM.isPlaced() || options == null
+                || selectedSigField != null) {
+            return;
+        }
+        PageInfo pageInfo = new PdfExtraInfo(options).getPageInfo(documentVM.getCurrentPage());
+        if (pageInfo == null) {
+            return;
+        }
+        float pw = pageInfo.getWidth();
+        float ph = pageInfo.getHeight();
+
+        float llx = signingVM.positionLLXProperty().get();
+        float lly = signingVM.positionLLYProperty().get();
+        float urx = signingVM.positionURXProperty().get();
+        float ury = signingVM.positionURYProperty().get();
+
+        if (VisibleSignatureCoordinator.hasUsablePosition(llx, lly, urx, ury, pw, ph)) {
+            placementVM.fromPdfCoordinates(llx, lly, urx, ury, pw, ph);
+        } else {
+            // Safe default: bottom-right, 15% × 8% of the page with ~5% margins.
+            placementVM.setRelWidth(0.15);
+            placementVM.setRelHeight(0.08);
+            placementVM.setRelX(0.80);
+            placementVM.setRelY(0.87);
+            placementVM.setPlaced(true);
+        }
+        signingVM.pageProperty().set(documentVM.getCurrentPage());
+    }
+
+    /**
+     * Updates the status-bar output path label to show the destination filename
+     * (or the default "{input}_signed.pdf" suggestion if no explicit path is set).
+     */
+    private void updateOutputPathLabel() {
+        if (lblOutputPath == null) {
+            return;
+        }
+        if (!documentVM.isDocumentLoaded()) {
+            lblOutputPath.setVisible(false);
+            lblOutputPath.setText("");
+            lblOutputPath.setTooltip(null);
+            return;
+        }
+        String outPath = signingVM.outFileProperty().get();
+        String displayPath = (outPath != null && !outPath.isEmpty())
+                ? outPath
+                : suggestedOutFileFor(documentVM.getDocumentFile());
+        if (displayPath == null || displayPath.isEmpty()) {
+            lblOutputPath.setVisible(false);
+            lblOutputPath.setTooltip(null);
+            return;
+        }
+        File f = new File(displayPath);
+        boolean collides = outputEqualsInput(f, documentVM.getDocumentFile());
+        lblOutputPath.setText((collides ? "⚠ " : "→ ") + f.getName());
+        lblOutputPath.setTooltip(new Tooltip(
+                collides ? RES.get("jfx.gui.sig.outputEqualsInput.warning") : displayPath));
+        lblOutputPath.pseudoClassStateChanged(WARNING_PSEUDO_CLASS, collides);
+        lblOutputPath.setVisible(true);
+    }
+
+    /**
+     * True when the resolved output path points at the input file itself — signing would overwrite the source.
+     */
+    private static boolean outputEqualsInput(File output, File input) {
+        if (input == null) {
+            return false;
+        }
+        try {
+            return output.getCanonicalFile().equals(input.getCanonicalFile());
+        } catch (java.io.IOException e) {
+            return output.getAbsoluteFile().equals(input.getAbsoluteFile());
+        }
+    }
+
+    /**
+     * Computes the default output path for a given input file, honoring the output directory ({@code outPath}) and the
+     * suffix currently held by the signing view model. Returns null if the input is null.
+     */
+    private String suggestedOutFileFor(File inputFile) {
+        return inputFile == null ? null
+                : BasicSignerOptions.composeOutFileName(trimToNull(signingVM.outPathProperty().get()), null,
+                        inputFile.getAbsolutePath(), signingVM.outSuffixProperty().get());
+    }
+
+    /**
+     * True when {@code baseName} is blank or is exactly the name the given previous input derives with the current
+     * suffix — i.e. not a name the user deliberately chose, so it is safe to refresh for a new document.
+     */
+    private boolean isDerivedBaseName(String baseName, String previousInFile) {
+        if (trimToNull(baseName) == null) {
+            return true;
+        }
+        if (trimToNull(previousInFile) == null) {
+            return false;
+        }
+        String derived = new File(suggestedOutFileFor(new File(previousInFile))).getName();
+        return baseName.equals(derived);
+    }
+
+    /**
+     * Reloads the signing view model from {@code options} after they were changed behind its back (a preset load, an
+     * owner-password retry) and recomposes the output path. The output file name is carried over rather than re-read,
+     * because {@code options} hold it as a path composed with the suffix and input they had before the change.
+     */
+    private void reloadFromOptionsKeepingOutputName() {
+        signingVM.syncFromOptionsKeepingOutBaseName(options);
+        resolveOutputFile();
+    }
+
+    /**
+     * Resolves the effective output path from the two user-facing fields — the output directory ({@code outPath}) and the
+     * output file name ({@code outBaseName}) — plus the input file and suffix, and writes it to {@code outFile} (the value
+     * the engines, the status-bar label and the sandbox portal check consume). A blank name means "use the name derived
+     * from the input and the suffix", shown as the field's prompt text; a blank directory means "next to the input".
+     */
+    private void resolveOutputFile() {
+        File input = documentVM.getDocumentFile();
+        String name = trimToNull(signingVM.outBaseNameProperty().get());
+        if (signaturePropertiesController != null) {
+            String derived = input == null ? null : new File(suggestedOutFileFor(input)).getName();
+            signaturePropertiesController.setOutFileNamePrompt(derived);
+        }
+        String resolved;
+        if (name == null) {
+            resolved = suggestedOutFileFor(input);
+        } else {
+            String dir = trimToNull(signingVM.outPathProperty().get());
+            if (dir == null && input != null) {
+                dir = input.getParent();
+            }
+            resolved = joinDirAndName(dir, name);
+        }
+        signingVM.outFileProperty().set(resolved);
+    }
+
+    private static String joinDirAndName(String dir, String name) {
+        if (dir == null || dir.isEmpty()) {
+            return name;
+        }
+        String d = dir.replace('\\', '/');
+        return d.endsWith("/") ? d + name : d + "/" + name;
+    }
+
+    private static String trimToNull(String s) {
+        if (s == null) {
+            return null;
+        }
+        String t = s.trim();
+        return t.isEmpty() ? null : t;
+    }
+
+    /**
+     * Splits an absolute output path chosen through a Save or directory dialog into the directory and base-name fields,
+     * so the two controls reflect the choice and {@link #resolveOutputFile()} recomposes the same path.
+     */
+    private void applyChosenOutputFile(String absolutePath) {
+        File f = new File(absolutePath);
+        signingVM.outPathProperty().set(f.getParent());
+        signingVM.outBaseNameProperty().set(f.getName());
+    }
+
+
+    private void updateNavButtonState() {
+        btnPrevPage.setDisable(!documentVM.canGoPrev());
+        btnNextPage.setDisable(!documentVM.canGoNext());
+    }
+
+    private void expandTsaPane() {
+        if (sidePanelAccordion != null && tsaAccordionPane != null) {
+            sidePanelAccordion.setExpandedPane(tsaAccordionPane);
+        }
+    }
+
+    private void expandEncryptionPane() {
+        if (sidePanelAccordion != null && encryptionAccordionPane != null) {
+            sidePanelAccordion.setExpandedPane(encryptionAccordionPane);
+        }
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.trim().isEmpty();
+    }
+
+    private void updateStatus(String message) {
+        lblStatus.setText(message);
+    }
+
+    private void updateStatusForDocument() {
+        File file = documentVM.getDocumentFile();
+        if (file != null) {
+            updateStatus(file.getName() + " - Page " + documentVM.getCurrentPage()
+                    + "/" + documentVM.getPageCount());
+        }
+    }
+
+    private void updateStatusWithHint() {
+        if (documentVM.isDocumentLoaded() && placementVM.isPlaced()) {
+            showShiftHint();
+        } else if (documentVM.isDocumentLoaded()) {
+            cancelShiftHint();
+            updateStatusForDocument();
+        }
+    }
+
+    /** Briefly show the Shift-to-replace hint, then revert to filename/page. */
+    private void showShiftHint() {
+        if (!documentVM.isDocumentLoaded() || !placementVM.isPlaced()) return;
+        final String hintText = RES.get("jfx.gui.status.shiftToReplace");
+        updateStatus(hintText);
+        if (shiftHintTimer == null) {
+            shiftHintTimer = new PauseTransition(Duration.seconds(4));
+        } else {
+            shiftHintTimer.stop();
+        }
+        // Only revert if the hint is still the message being shown
+        shiftHintTimer.setOnFinished(ev -> {
+            if (hintText.equals(lblStatus.getText())) {
+                updateStatusForDocument();
+            }
+        });
+        shiftHintTimer.playFromStart();
+    }
+
+    private void cancelShiftHint() {
+        if (shiftHintTimer != null) shiftHintTimer.stop();
+    }
+
+    private void renderCurrentPage() {
+        if (options == null || !documentVM.isDocumentLoaded()) {
+            return;
+        }
+        renderService.cancel();
+        renderService.reset();
+        renderService.setOptions(options);
+        renderService.setPage(documentVM.getCurrentPage());
+        progressBar.setVisible(true);
+        renderService.start();
+    }
+
+    // --- Keyboard handling ---
+    private void handleKeyPress(KeyEvent event) {
+        if (!documentVM.isDocumentLoaded()) return;
+        if (event.getCode() == KeyCode.PAGE_DOWN) {
+            documentVM.nextPage();
+            event.consume();
+        } else if (event.getCode() == KeyCode.PAGE_UP) {
+            documentVM.prevPage();
+            event.consume();
+        } else if (event.getCode() == KeyCode.Z && event.isShortcutDown() && placementVM.isPlaced()) {
+            placementVM.reset();
+            event.consume();
+        }
+    }
+
+    // --- Menu handlers ---
+
+    @FXML
+    private void onFileOpen() {
+        NativeFileChooser fc = new NativeFileChooser()
+                .setTitle(RES.get("jfx.gui.dialog.openPdf.title"))
+                .addFilter(ExtensionFilter.of("PDF Files", "*.pdf"));
+        if (lastOpenDir != null) {
+            fc.setInitialDirectory(lastOpenDir);
+        }
+        File file = fc.showOpenDialog(stage);
+        if (file != null) {
+            openDocument(file);
+        }
+    }
+
+    @FXML
+    private void onFileClose() {
+        closeDocument();
+    }
+
+    @FXML
+    private void onFileExit() {
+        storeAndCleanup();
+        stage.close();
+    }
+
+    @FXML
+    private void onResetSettings() {
+        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
+        confirm.setTitle(RES.get("jfx.gui.dialog.resetSettings.title"));
+        confirm.setHeaderText(null);
+        confirm.setContentText(RES.get("jfx.gui.dialog.resetSettings.text"));
+        confirm.initOwner(stage);
+
+        Optional<ButtonType> result = confirm.showAndWait();
+        if (result.isPresent() && result.get() == ButtonType.OK) {
+            // Wipe the config directory (main config + presets) and clear in-memory state.
+            PropertyStoreFactory.getInstance().resetAll();
+            options = new BasicSignerOptions();
+
+            // Refresh preset list from disk (now empty) — this updates the toolbar combo.
+            presetManager.scan();
+
+            // Reset the ViewModel (which updates all bound UI controls)
+            signingVM.resetToDefaults();
+
+            // The wiped config reverts the engine to the bundled default; re-seed capability gating and
+            // the PAdES-level default to match.
+            refreshActiveEngineFromConfig();
+
+            // Clear placement and close any open document
+            if (documentVM.isDocumentLoaded()) {
+                closeDocument();
+            }
+            placementVM.reset();
+
+            // Refresh the recent files menu (now empty)
+            refreshRecentFilesMenu();
+
+            updateStatus(RES.get("jfx.gui.status.settingsReset"));
+        }
+    }
+
+    @FXML
+    private void onSaveAs() {
+        if (!documentVM.isDocumentLoaded()) {
+            showAlert(Alert.AlertType.WARNING,
+                    RES.get("jfx.gui.dialog.noDocument.title"),
+                    RES.get("jfx.gui.dialog.noDocument.text"));
+            return;
+        }
+        promptForOutputFile();
+    }
+
+    /**
+     * Opens the Save dialog and stores the chosen path in the signing VM. Returns true
+     * if the user picked a file, false if they cancelled. Skips the doc-portal path as
+     * an initial directory — the portal silently ignores it and writes there don't
+     * persist on the host (see {@link Sandbox#isDocPortalPath}).
+     */
+    private boolean promptForOutputFile() {
+        String current = signingVM.outFileProperty().get();
+        if (current == null || current.isEmpty()) {
+            current = suggestedOutFileFor(documentVM.getDocumentFile());
+        }
+        NativeFileChooser fc = new NativeFileChooser()
+                .setTitle(RES.get("jfx.gui.dialog.selectOutputPdf"))
+                .addFilter(ExtensionFilter.of("PDF Files", "*.pdf"));
+        if (current != null && !current.isEmpty()) {
+            File currentFile = new File(current);
+            if (!Sandbox.isDocPortalPath(current)) {
+                File parent = currentFile.getParentFile();
+                if (parent != null && parent.isDirectory()) {
+                    fc.setInitialDirectory(parent);
+                }
+            }
+            fc.setInitialFileName(currentFile.getName());
+        }
+        File file = fc.showSaveDialog(stage);
+        if (file == null) return false;
+        applyChosenOutputFile(file.getAbsolutePath());
+        return true;
+    }
+
+    /**
+     * Opens the directory picker to (re-)acquire a portal write grant for the fixed output directory, seeded at the
+     * current directory. Returns true if the user picked one — the chosen directory becomes the new {@code outPath} and
+     * is recorded as granted for the session — false if they cancelled. Used only inside the sandbox.
+     */
+    private boolean promptForOutputDir() {
+        NativeFileChooser fc = new NativeFileChooser()
+                .setTitle(RES.get("jfx.gui.dialog.selectOutputDir"));
+        String current = trimToNull(signingVM.outPathProperty().get());
+        if (current != null) {
+            File dir = new File(current);
+            if (dir.isDirectory()) {
+                fc.setInitialDirectory(dir);
+            }
+        }
+        File chosen = fc.showOpenDirectoryDialog(stage);
+        if (chosen == null) return false;
+        signingVM.outPathProperty().set(chosen.getAbsolutePath());
+        return true;
+    }
+
+    @FXML
+    private void onSign() {
+        if (options == null || !documentVM.isDocumentLoaded()) {
+            showAlert(Alert.AlertType.WARNING,
+                    RES.get("jfx.gui.dialog.noDocument.title"),
+                    RES.get("jfx.gui.dialog.noDocument.text"));
+            return;
+        }
+
+        // Validate encryption-dependent required fields before signing
+        if (encryptionSettingsController != null && !encryptionSettingsController.isEncryptionConfigValid()) {
+            expandEncryptionPane();
+            String prefix = encryptionSettingsController.getValidationErrorKeyPrefix();
+            showAlert(Alert.AlertType.WARNING,
+                    RES.get(prefix + ".title"),
+                    RES.get(prefix + ".text"));
+            return;
+        }
+
+        // Validate TSA: when enabled, the TSA server URL is mandatory.
+        if (tsaSettingsController != null && !tsaSettingsController.isTsaConfigValid()) {
+            expandTsaPane();
+            showAlert(Alert.AlertType.WARNING,
+                    RES.get("jfx.gui.dialog.missingTsaUrl.title"),
+                    RES.get("jfx.gui.dialog.missingTsaUrl.text"));
+            return;
+        }
+
+        // In a sandbox, a fixed output directory loaded from a preset or the stored config has no portal
+        // write grant across restarts. Re-acquire it once per session through the directory picker before
+        // signing, so the composed "<dir>/<name>" is actually writable.
+        String outDir = trimToNull(signingVM.outPathProperty().get());
+        if (Sandbox.isSandboxed() && outDir != null && !Sandbox.hasDirectoryGrant(outDir)) {
+            if (!promptForOutputDir()) {
+                return;
+            }
+        }
+
+        // In a sandbox, the auto-derived "<input>_signed.pdf" lands inside the doc
+        // portal FUSE mount and is not exposed back to the host. Force a Save dialog
+        // (routed through the portal) so the user picks a real persistable location.
+        String effectiveOut = signingVM.outFileProperty().get();
+        if (effectiveOut == null || effectiveOut.isEmpty()) {
+            effectiveOut = suggestedOutFileFor(documentVM.getDocumentFile());
+        }
+        if (Sandbox.isDocPortalPath(effectiveOut)) {
+            if (!promptForOutputFile()) {
+                return;
+            }
+        }
+
+        flushUiToViewModel();
+        signingVM.syncToOptions(options);
+
+        options.setOutFile(options.getOutFileX());
+
+        // LT/LTA preflight (issue #432): warn before signing if the DSS engine isn't configured for the
+        // online fetching + trust anchor that LT/LTA require, and offer to enable them.
+        if (!confirmLtPreflight()) {
+            return;
+        }
+
+        // Start signing
+        timestampRun = false;
+        signingService.cancel();
+        signingService.reset();
+        signingService.setOptions(options.createCopy());
+        progressBar.setVisible(true);
+        progressBar.setProgress(-1); // indeterminate
+        updateStatus(RES.get("jfx.gui.status.signingInProgress"));
+        signingService.start();
+    }
+
+    /**
+     * Appends a document timestamp instead of signing: no key material, no appearance, and none of the
+     * signature-only settings are consulted. The TSA URL is required regardless of the TSA toggle, which means
+     * "timestamp the signature I am about to make" - a different thing.
+     */
+    @FXML
+    private void onTimestamp() {
+        if (options == null || !documentVM.isDocumentLoaded()) {
+            showAlert(Alert.AlertType.WARNING,
+                    RES.get("jfx.gui.dialog.noDocument.title"),
+                    RES.get("jfx.gui.dialog.noDocument.text"));
+            return;
+        }
+        if (trimToNull(signingVM.tsaUrlProperty().get()) == null) {
+            expandTsaPane();
+            showAlert(Alert.AlertType.WARNING,
+                    RES.get("jfx.gui.dialog.missingTsaUrl.title"),
+                    RES.get("jfx.gui.dialog.missingTsaUrl.text"));
+            return;
+        }
+
+        String outDir = trimToNull(signingVM.outPathProperty().get());
+        if (Sandbox.isSandboxed() && outDir != null && !Sandbox.hasDirectoryGrant(outDir)) {
+            if (!promptForOutputDir()) {
+                return;
+            }
+        }
+
+        flushUiToViewModel();
+        signingVM.syncToOptions(options);
+        options.setTimestampOnly(true);
+        // The view model derives the timestamp flag from the TSA toggle, and isTimestampX() gates the whole
+        // TSA plumbing - which this operation is nothing but.
+        options.setTimestamp(true);
+        options.setOutFile(timestampOutFileFor(documentVM.getDocumentFile()));
+
+        if (Sandbox.isDocPortalPath(options.getOutFile())) {
+            if (!promptForOutputFile()) {
+                return;
+            }
+            options.setOutFile(signingVM.outFileProperty().get());
+        }
+
+        timestampRun = true;
+        timestampOutFile = options.getOutFile();
+        final BasicSignerOptions timestampOptions = options.createCopy();
+        options.setTimestampOnly(false);
+
+        signingService.cancel();
+        signingService.reset();
+        signingService.setOptions(timestampOptions);
+        progressBar.setVisible(true);
+        progressBar.setProgress(-1); // indeterminate
+        updateStatus(RES.get("jfx.gui.status.timestampInProgress"));
+        signingService.start();
+    }
+
+    /**
+     * The output path of a document timestamp: the name typed into the output fields when there is one,
+     * otherwise the input name with the timestamp suffix ({@code output.suffix.timestamp}) rather than the
+     * signing one. An explicit suffix - including the empty one the suffix switch produces - is honoured.
+     */
+    private String timestampOutFileFor(File inputFile) {
+        if (trimToNull(signingVM.outBaseNameProperty().get()) != null) {
+            return signingVM.outFileProperty().get();
+        }
+        final String suffix = signingVM.outSuffixProperty().get();
+        return BasicSignerOptions.composeOutFileName(trimToNull(signingVM.outPathProperty().get()), null,
+                inputFile.getAbsolutePath(), suffix != null ? suffix : AppConfig.defaultTimestampSuffix());
+    }
+
+    /**
+     * Runs the LT/LTA trust preflight ({@link DssLtTrustPreflight}) against the active engine and its config.
+     * When the configuration would make LT/LTA signing fail (issue #432), shows a confirmation offering to
+     * enable the missing prerequisites and persist them, with a "sign anyway" escape. Confirming always turns on
+     * {@code engine.dss.online.enabled}; it also turns on the bundled EU LOTL ({@code engine.dss.trust.eu.enabled})
+     * unless the user has configured a custom LOTL ({@code engine.dss.trust.lotlUrls}), which replaces it. Extra
+     * anchor material (truststore / certFiles / certUrls) is additive and does not suppress the EU LOTL.
+     *
+     * @return {@code true} to proceed with signing, {@code false} to abort
+     */
+    private boolean confirmLtPreflight() {
+        final SigningEngine engine = engineCapabilities.activeEngineProperty().get();
+        if (engine == null) {
+            return true;
+        }
+        final EngineConfig engineConfig = AppConfig.engineConfigFor(engine.id());
+        final DssLtTrustPreflight.Result preflight = DssLtTrustPreflight.check(options, engine, engineConfig);
+        if (!preflight.hasIssues()) {
+            return true;
+        }
+
+        final Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
+        confirm.setTitle(RES.get("jfx.gui.dialog.ltPreflight.title"));
+        confirm.setHeaderText(null);
+        confirm.setContentText(RES.get("jfx.gui.dialog.ltPreflight.text"));
+        confirm.initOwner(stage);
+        final ButtonType enableAndSign = new ButtonType(RES.get("jfx.gui.dialog.ltPreflight.enable"),
+                ButtonBar.ButtonData.YES);
+        final ButtonType signAnyway = new ButtonType(RES.get("jfx.gui.dialog.ltPreflight.anyway"),
+                ButtonBar.ButtonData.NO);
+        confirm.getButtonTypes().setAll(enableAndSign, signAnyway, ButtonType.CANCEL);
+
+        final Optional<ButtonType> result = confirm.showAndWait();
+        if (result.isEmpty() || result.get() == ButtonType.CANCEL) {
+            return false;
+        }
+        if (result.get() == enableAndSign) {
+            final AdvancedConfig cfg = PropertyStoreFactory.getInstance().advancedConfig();
+            cfg.setProperty("engine.dss.online.enabled", true);
+            if (!preflight.customLotlConfigured()) {
+                cfg.setProperty("engine.dss.trust.eu.enabled", true);
+            }
+            try {
+                cfg.save();
+            } catch (Exception e) {
+                LOGGER.log(Level.WARNING, "Could not persist DSS LT/LTA prerequisites", e);
+            }
+        }
+        return true;
+    }
+
+    @FXML
+    private void onZoomIn() {
+        documentVM.zoomIn();
+    }
+
+    @FXML
+    private void onZoomOut() {
+        documentVM.zoomOut();
+    }
+
+    @FXML
+    private void onZoomFit() {
+        if (!documentVM.isDocumentLoaded()) return;
+        double zoom = pdfPageView.zoomToFit(scrollPane.getViewportBounds().getWidth(),
+                scrollPane.getViewportBounds().getHeight());
+        if (zoom > 0) {
+            documentVM.setZoomLevel(zoom);
+        }
+    }
+
+    @FXML
+    private void onPrevPage() {
+        documentVM.prevPage();
+    }
+
+    @FXML
+    private void onNextPage() {
+        documentVM.nextPage();
+    }
+
+    @FXML
+    private void onToggleSidePanel() {
+        // Simply moving the SplitPane divider doesn't hide the accordion:
+        // the side-panel container has a minWidth, so the SplitPane refuses
+        // to shrink it below that. Instead, detach the node entirely when
+        // hiding and re-insert it when showing.
+        if (detachedSidePanel == null) {
+            if (splitPane.getItems().size() < 2) return;
+            detachedSidePanel = splitPane.getItems().remove(0);
+        } else {
+            splitPane.getItems().add(0, detachedSidePanel);
+            detachedSidePanel = null;
+            splitPane.setDividerPositions(0.28);
+        }
+    }
+
+    @FXML
+    private void onAbout() {
+        Alert alert = new Alert(Alert.AlertType.INFORMATION);
+        alert.setTitle(RES.get("jfx.gui.menu.help.about"));
+        alert.setHeaderText("JSignPdf " + Constants.VERSION);
+        alert.setContentText(RES.get("jfx.gui.dialog.about.description"));
+        alert.showAndWait();
+    }
+
+    // --- Drag and drop ---
+
+    @FXML
+    private void onDragOver(DragEvent event) {
+        Dragboard db = event.getDragboard();
+        if (db.hasFiles()) {
+            List<File> files = db.getFiles();
+            if (files.size() == 1 && files.get(0).getName().toLowerCase().endsWith(".pdf")) {
+                event.acceptTransferModes(TransferMode.COPY);
+            }
+        }
+        event.consume();
+    }
+
+    @FXML
+    private void onDragDropped(DragEvent event) {
+        Dragboard db = event.getDragboard();
+        boolean success = false;
+        if (db.hasFiles()) {
+            List<File> files = db.getFiles();
+            if (files.size() == 1 && files.get(0).getName().toLowerCase().endsWith(".pdf")) {
+                openDocument(files.get(0));
+                success = true;
+            }
+        }
+        event.setDropCompleted(success);
+        event.consume();
+    }
+
+    // --- Document handling ---
+
+    private void openDocument(File file) {
+        lastOpenDir = file.getParentFile();
+        saveViewStateToConfig();
+        try {
+            if (options == null) {
+                BasicSignerOptions opts = new BasicSignerOptions();
+                opts.loadOptions();
+                initFromOptions(opts);
+            }
+
+            // Reset visible signature and placement from previous document
+            signingVM.visibleProperty().set(false);
+            placementVM.reset();
+
+            // A derived output name is refreshed for the new document; a name the user deliberately chose is kept for
+            // the rest of the session. The two are told apart by comparing against the name the previous input derived —
+            // captured before setInFile below overwrites it. The path resolves via the document-file listener once
+            // documentVM is updated further down.
+            if (isDerivedBaseName(signingVM.outBaseNameProperty().get(), options.getInFile())) {
+                signingVM.outBaseNameProperty().set(null);
+            }
+
+            options.setInFile(file.getAbsolutePath());
+
+            // Try to open PDF, prompting for owner password if needed
+            int pages;
+            try {
+                PdfExtraInfo extraInfo = new PdfExtraInfo(options);
+                pages = extraInfo.getNumberOfPages();
+            } catch (BadPasswordException e) {
+                pages = promptPasswordAndRetry(file);
+            }
+
+            if (pages < 1) {
+                updateStatus(RES.get("jfx.gui.status.readError"));
+                return;
+            }
+
+            documentVM.setDocumentFile(file);
+            documentVM.setPageCount(pages);
+            documentVM.setZoomLevel(lastZoomLevel);
+
+            lblDropHint.setVisible(false);
+            setDocumentControlsDisabled(false);
+            lblPageCount.setText("/ " + pages);
+            txtPageNumber.setText("1");
+            cmbZoom.setValue(Math.round(lastZoomLevel * 100) + "%");
+
+            stage.setTitle("JSignPdf " + Constants.VERSION + " - " + file.getName());
+            LOGGER.info("Opened document: " + file.getAbsolutePath());
+
+            recentFilesManager.addFile(file);
+            refreshRecentFilesMenu();
+
+            refreshSignatureFields();
+
+            // Show signature overlay and render first page
+            signatureOverlay.setVisible(true);
+            documentVM.setCurrentPage(1);
+            renderCurrentPage();
+            updateNavButtonState();
+            maybeOfferJpxCodec(file);
+        } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, "Failed to open document", e);
+            updateStatus("Error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Prompts the user for the owner password and retries opening the PDF.
+     * Loops until the password works, or the user cancels.
+     *
+     * @return number of pages, or -1 if cancelled/failed
+     */
+    private int promptPasswordAndRetry(File file) {
+        boolean firstAttempt = true;
+        while (true) {
+            Optional<String> password = showPasswordDialog(firstAttempt);
+            if (password.isEmpty()) {
+                // User cancelled
+                return -1;
+            }
+            firstAttempt = false;
+
+            options.setPdfOwnerPwd(password.get().toCharArray());
+            options.setAdvanced(true);
+            reloadFromOptionsKeepingOutputName();
+
+            try {
+                PdfExtraInfo extraInfo = new PdfExtraInfo(options);
+                return extraInfo.getNumberOfPages();
+            } catch (BadPasswordException e) {
+                // Wrong password - loop to ask again
+            }
+        }
+    }
+
+    /**
+     * Shows a dialog asking the user for the PDF owner password.
+     *
+     * @param firstAttempt true for the initial prompt, false after a wrong password
+     * @return the entered password, or empty if cancelled
+     */
+    private Optional<String> showPasswordDialog(boolean firstAttempt) {
+        Dialog<String> dialog = new Dialog<>();
+        dialog.setTitle(RES.get("jfx.gui.dialog.ownerPassword.title"));
+        dialog.setHeaderText(firstAttempt
+                ? RES.get("jfx.gui.dialog.ownerPassword.header")
+                : RES.get("jfx.gui.dialog.ownerPassword.headerRetry"));
+        dialog.initOwner(stage);
+
+        ButtonType okButtonType = new ButtonType(RES.get("jfx.gui.dialog.ownerPassword.ok"),
+                ButtonBar.ButtonData.OK_DONE);
+        dialog.getDialogPane().getButtonTypes().addAll(okButtonType, ButtonType.CANCEL);
+
+        PasswordField passwordField = new PasswordField();
+        passwordField.setPromptText(RES.get("jfx.gui.dialog.ownerPassword.prompt"));
+        passwordField.setPrefColumnCount(20);
+
+        GridPane grid = new GridPane();
+        grid.setHgap(10);
+        grid.setVgap(10);
+        grid.setPadding(new Insets(20, 10, 10, 10));
+        grid.add(new Label(RES.get("jfx.gui.dialog.ownerPassword.label")), 0, 0);
+        grid.add(passwordField, 1, 0);
+
+        dialog.getDialogPane().setContent(grid);
+
+        // Disable OK button when password field is empty
+        Button okButton = (Button) dialog.getDialogPane().lookupButton(okButtonType);
+        okButton.setDisable(true);
+        passwordField.textProperty().addListener((obs, oldVal, newVal) ->
+                okButton.setDisable(newVal.trim().isEmpty()));
+
+        // Focus the password field when dialog opens
+        Platform.runLater(passwordField::requestFocus);
+
+        dialog.setResultConverter(buttonType -> {
+            if (buttonType == okButtonType) {
+                return passwordField.getText();
+            }
+            return null;
+        });
+
+        return dialog.showAndWait();
+    }
+
+    /**
+     * If a JPEG 2000 reader is missing and the just-opened document actually contains {@code /JPXDecode} images, offer to
+     * download the optional codec. Detection runs off the FX thread; the confirmation and download run on the FX thread.
+     */
+    private void maybeOfferJpxCodec(File file) {
+        if (jpxPromptSkipped) {
+            return;
+        }
+        final Path pluginsDir = ConfigLocationResolver.getInstance().getPluginsDir();
+        if (pluginsDir == null || JpxPluginManager.isJpxReaderAvailable()) {
+            return;
+        }
+        final String password = options.getPdfOwnerPwdStrX();
+        Thread detector = new Thread(() -> {
+            if (!JpxDetector.containsJpx(file, password)) {
+                return;
+            }
+            Platform.runLater(() -> offerJpxCodec(pluginsDir, file));
+        }, "jpx-detect");
+        detector.setDaemon(true);
+        detector.start();
+    }
+
+    private void offerJpxCodec(Path pluginsDir, File file) {
+        // Re-check on the FX thread: state may have changed while detection ran in the background, or the user may
+        // have navigated to another document.
+        if (jpxPromptSkipped || JpxPluginManager.isJpxReaderAvailable() || !file.equals(documentVM.getDocumentFile())) {
+            return;
+        }
+        JpxCodecPrompt prompt = new JpxCodecPrompt(stage);
+        if (!prompt.confirmDownload()) {
+            jpxPromptSkipped = true;
+            return;
+        }
+        if (prompt.runDownload(pluginsDir)) {
+            JpxPluginManager.registerInstalledPlugins();
+            renderCurrentPage();
+        }
+        // On failure/cancel we intentionally leave jpxPromptSkipped false so the offer returns the next time a
+        // JPEG 2000 document is opened this session.
+    }
+
+    /**
+     * Offers the blank signature fields of the freshly opened document in the appearance panel. Already signed
+     * fields are left out - the combo is a "sign into this one" picker, and the CLI listing is the place to see
+     * the full inventory.
+     */
+    private void refreshSignatureFields() {
+        List<SignatureFieldInfo> blankFields = List.of();
+        try {
+            blankFields = new PdfExtraInfo(options).getSignatureFields().stream().filter(SignatureFieldInfo::blank)
+                    .toList();
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "Unable to read the signature fields of the document", e);
+        }
+        if (signatureSettingsController != null) {
+            signatureSettingsController.setSignatureFields(blankFields);
+        }
+        refreshBlankFieldMarkers(blankFields);
+    }
+
+    /**
+     * Reads the rectangles of the blank signature fields once per document, so they can be marked on the page
+     * without reopening it on every page change. Fields the author made invisible - no rectangle, or a hidden
+     * widget - are left out: they show in no viewer either.
+     */
+    private void refreshBlankFieldMarkers(List<SignatureFieldInfo> blankFields) {
+        blankSigFieldMarkers.clear();
+        final List<SignatureFieldInfo> markable = blankFields.stream()
+                .filter(field -> field.page() >= 1 && field.hasVisibleRect() && !field.hidden()).toList();
+        if (options != null && !markable.isEmpty()) {
+            blankSigFieldMarkers.putAll(new PdfExtraInfo(options).getFieldRelativeRects(markable));
+        }
+        updateBlankFieldMarkers();
+    }
+
+    /**
+     * Draws the markers of the unsigned signature fields of the displayed page. The selected field is left out -
+     * {@link #updateFieldHighlight(SignatureFieldInfo)} marks it on its own.
+     */
+    private void updateBlankFieldMarkers() {
+        if (signatureOverlay == null) {
+            return;
+        }
+        final int page = documentVM.getCurrentPage();
+        final List<double[]> markers = new ArrayList<>();
+        for (Map.Entry<SignatureFieldInfo, float[]> entry : blankSigFieldMarkers.entrySet()) {
+            final SignatureFieldInfo field = entry.getKey();
+            if (field.page() != page || field.equals(selectedSigField)) {
+                continue;
+            }
+            final float[] rect = entry.getValue();
+            markers.add(new double[] { rect[0], rect[1], rect[2], rect[3] });
+        }
+        signatureOverlay.setBlankFieldMarkers(markers);
+    }
+
+    /**
+     * Reacts to a signature field being (de)selected: the field's own rectangle decides where the signature
+     * goes, so the placement rectangle is dropped, the position options go back to their defaults (they would
+     * only be ignored - and warned about - during signing) and the overlay stops accepting drags. The field is
+     * marked on its own page instead.
+     *
+     * @param field the selected field, or {@code null} for "create a new field"
+     */
+    private void onSigFieldSelected(SignatureFieldInfo field) {
+        final boolean hadField = selectedSigField != null;
+        selectedSigField = field;
+        selectedSigFieldMarker = null;
+        sigFieldSelected.set(field != null);
+        if (field == null) {
+            updateFieldHighlight(null);
+            signatureOverlay.setMouseTransparent(false);
+            if (hadField && signingVM.visibleProperty().get()) {
+                // The visible flag the field forced on survives its deselection, so the rectangle has to come
+                // back with it - otherwise signing would place the appearance at coordinates nothing on screen
+                // shows. The position options were reset with the selection, so this lands on the default spot.
+                autoPlaceVisibleSignature();
+            }
+            updateBlankFieldMarkers();
+            updateSigStateBadge();
+            return;
+        }
+        if (field.hasVisibleRect() && options != null) {
+            // Read once per selection - the marker is then redrawn from these relative coordinates on every
+            // page change and resize, without reopening the document.
+            selectedSigFieldMarker = new PdfExtraInfo(options).getFieldRelativeRect(field);
+        }
+        placementVM.reset();
+        signingVM.pageProperty().set(Constants.DEFVAL_PAGE);
+        signingVM.positionLLXProperty().set(Constants.DEFVAL_LLX);
+        signingVM.positionLLYProperty().set(Constants.DEFVAL_LLY);
+        signingVM.positionURXProperty().set(Constants.DEFVAL_URX);
+        signingVM.positionURYProperty().set(Constants.DEFVAL_URY);
+        signatureOverlay.setMouseTransparent(true);
+        if (documentVM.isDocumentLoaded() && field.page() >= 1 && field.page() != documentVM.getCurrentPage()) {
+            documentVM.setCurrentPage(field.page());
+        }
+        updateFieldHighlight(field);
+        updateBlankFieldMarkers();
+        updateSigStateBadge();
+    }
+
+    /**
+     * Draws (or hides) the marker of the selected field, from the relative coordinates computed when the field
+     * was selected. Nothing is marked while another page than the field's own is being shown.
+     */
+    private void updateFieldHighlight(SignatureFieldInfo field) {
+        if (field == null || selectedSigFieldMarker == null || field.page() != documentVM.getCurrentPage()) {
+            signatureOverlay.clearFieldHighlight();
+            pdfArea.clearFieldPreview();
+            return;
+        }
+        signatureOverlay.setFieldHighlight(selectedSigFieldMarker[0], selectedSigFieldMarker[1],
+                selectedSigFieldMarker[2], selectedSigFieldMarker[3]);
+        pdfArea.setFieldPreview(selectedSigFieldMarker[0], selectedSigFieldMarker[1],
+                selectedSigFieldMarker[2], selectedSigFieldMarker[3], field.width(), field.height());
+    }
+
+    private void closeDocument() {
+        renderService.cancel();
+        signingVM.visibleProperty().set(false);
+        documentVM.reset();
+        placementVM.reset();
+        if (signatureSettingsController != null) {
+            signatureSettingsController.setSignatureFields(List.of());
+        }
+        blankSigFieldMarkers.clear();
+        signatureOverlay.clearBlankFieldMarkers();
+        signatureOverlay.setVisible(false);
+        pdfArea.clearFieldPreview();
+        if (options != null) {
+            options.setInFile(null);
+        }
+        pdfPageView.setVisible(false);
+        lblDropHint.setVisible(true);
+        setDocumentControlsDisabled(true);
+        lblPageCount.setText("/ 0");
+        txtPageNumber.setText("");
+        updateStatus(RES.get("jfx.gui.status.ready"));
+        updateOutputPathLabel();
+        updateSigStateBadge();
+        stage.setTitle("JSignPdf " + Constants.VERSION);
+    }
+
+    private void loadPersistedViewState() {
+        try {
+            PropertyProvider cfg = PropertyStoreFactory.getInstance().mainConfig();
+            String dir = cfg.getProperty(KEY_LAST_OPEN_DIR);
+            if (dir != null && !dir.isEmpty()) {
+                File f = new File(dir);
+                if (f.isDirectory()) {
+                    lastOpenDir = f;
+                }
+            }
+            String zoom = cfg.getProperty(KEY_LAST_ZOOM);
+            if (zoom != null) {
+                lastZoomLevel = Double.parseDouble(zoom);
+            }
+        } catch (Exception e) {
+            LOGGER.log(Level.FINE, "Could not load persisted view state", e);
+        }
+    }
+
+    private void saveViewStateToConfig() {
+        try {
+            PropertyProvider cfg = PropertyStoreFactory.getInstance().mainConfig();
+            if (lastOpenDir != null) {
+                cfg.setProperty(KEY_LAST_OPEN_DIR, lastOpenDir.getAbsolutePath());
+            }
+            cfg.setProperty(KEY_LAST_ZOOM, String.valueOf(lastZoomLevel));
+            cfg.save();
+        } catch (Exception e) {
+            LOGGER.log(Level.FINE, "Could not persist view state", e);
+        }
+    }
+
+    /**
+     * Returns the document view model (used by other controllers).
+     */
+    public DocumentViewModel getDocumentViewModel() {
+        return documentVM;
+    }
+
+    private void showAlert(Alert.AlertType type, String title, String content) {
+        Alert alert = new Alert(type);
+        alert.setTitle(title);
+        alert.setHeaderText(null);
+        alert.setContentText(content);
+        alert.showAndWait();
+    }
+
+    /**
+     * Returns the signature placement view model.
+     */
+    public SignaturePlacementViewModel getPlacementViewModel() {
+        return placementVM;
+    }
+
+    /**
+     * Returns the signing options view model.
+     */
+    public SigningOptionsViewModel getSigningOptionsViewModel() {
+        return signingVM;
+    }
+
+    /**
+     * Returns the current signer options (used by other controllers).
+     */
+    public BasicSignerOptions getOptions() {
+        return options;
+    }
+}

@@ -1,37 +1,15 @@
-/*
- * The contents of this file are subject to the Mozilla Public License
- * Version 1.1 (the "License"); you may not use this file except in
- * compliance with the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
- * License for the specific language governing rights and limitations
- * under the License.
- *
- * The Original Code is 'JSignPdf, a free application for PDF signing'.
- *
- * The Initial Developer of the Original Code is Josef Cacek.
- * Portions created by Josef Cacek are Copyright (C) Josef Cacek. All Rights Reserved.
- *
- * Contributor(s): Josef Cacek.
- *
- * Alternatively, the contents of this file may be used under the terms
- * of the GNU Lesser General Public License, version 2.1 (the  "LGPL License"), in which case the
- * provisions of LGPL License are applicable instead of those
- * above. If you wish to allow use of your version of this file only
- * under the terms of the LGPL License and not to allow others to use
- * your version of this file under the MPL, indicate your decision by
- * deleting the provisions above and replace them with the notice and
- * other provisions required by the LGPL License. If you do not delete
- * the provisions above, a recipient may use your version of this file
- * under either the MPL or the LGPL License.
- */
 package net.sf.jsignpdf;
 
 import static net.sf.jsignpdf.Constants.*;
 
+import java.io.IOException;
+import java.io.PrintStream;
 import java.net.Proxy;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -41,6 +19,7 @@ import net.sf.jsignpdf.types.PDFEncryption;
 import net.sf.jsignpdf.types.PrintRight;
 import net.sf.jsignpdf.types.RenderMode;
 import net.sf.jsignpdf.types.ServerAuthentication;
+import net.sf.jsignpdf.utils.AppConfig;
 
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
@@ -64,18 +43,30 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
 
     static final Options OPTS = new Options();
 
-    private String outPrefix;
-    private String outSuffix = Constants.DEFAULT_OUT_SUFFIX;
-    private String outPath;
-
     private String[] files;
 
     private boolean printHelp = true;
     private boolean printVersion;
     private boolean listKeyStores;
+    private boolean listKeyStoreProviders;
     private boolean listKeys;
+    private boolean listEngines;
+    private boolean listSigFields;
 
     private boolean gui;
+
+    private StdinPasswordReader passwordReader;
+    private PrintStream warningOut;
+
+    /** Test seam: override the stdin password reader. */
+    void setPasswordReader(StdinPasswordReader passwordReader) {
+        this.passwordReader = passwordReader;
+    }
+
+    /** Test seam: override the stream the stdin-sentinel warning is written to (default {@link System#err}). */
+    void setWarningOut(PrintStream warningOut) {
+        this.warningOut = warningOut;
+    }
 
     /**
      * Parses options provided as command line arguments.
@@ -99,12 +90,16 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
             props.loadProperties(line.getOptionValue(ARG_LOADPROPS_FILE));
         }
 
-        // use the advanced mode for the command line even if the properties file says "view.advanced=false"
-        setAdvanced(true);
-
         if (line.hasOption(ARG_LOADPROPS) || line.hasOption(ARG_LOADPROPS_FILE)) {
             loadOptions();
         }
+
+        // Use the advanced mode for the command line even if the properties file says "view.advanced=false" -
+        // after the load, which sets the flag from that very property. The command line has no basic mode, and
+        // the flag gates whether the key password, the PDF passwords and the permissions are used at all: with
+        // it off, --key-pwd silently falls back to the keystore password (getKeyPasswdX) and signing fails with
+        // an UnrecoverableKeyException.
+        setAdvanced(true);
 
         if (line.hasOption(ARG_QUIET)) {
             // disable logging
@@ -120,21 +115,28 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
         setPrintHelp(line.hasOption(ARG_HELP));
         setPrintVersion(line.hasOption(ARG_VERSION));
         setListKeyStores(line.hasOption(ARG_LIST_KS_TYPES));
+        setListKeyStoreProviders(line.hasOption(ARG_LIST_KS_PROVIDERS));
         setListKeys(line.hasOption(ARG_LIST_KEYS));
+        setListEngines(line.hasOption(ARG_LIST_ENGINES));
+        setListSigFields(line.hasOption(ARG_LIST_SIG_FIELDS));
+
+        AppConfig.applyAdvancedOverrides(parseAdvancedOverrides(line));
+
+        // signing engine selection (CLI override of advanced.properties)
+        if (line.hasOption(ARG_ENGINE))
+            setEngine(line.getOptionValue(ARG_ENGINE));
 
         // basic options
         if (line.hasOption(ARG_KS_TYPE))
             setKsType(line.getOptionValue(ARG_KS_TYPE));
+        if (line.hasOption(ARG_KS_PROVIDER))
+            setKsProvider(line.getOptionValue(ARG_KS_PROVIDER));
         if (line.hasOption(ARG_KS_FILE))
             setKsFile(line.getOptionValue(ARG_KS_FILE));
-        if (line.hasOption(ARG_KS_PWD))
-            setKsPasswd(line.getOptionValue(ARG_KS_PWD));
         if (line.hasOption(ARG_KEY_ALIAS))
             setKeyAlias(line.getOptionValue(ARG_KEY_ALIAS));
         if (line.hasOption(ARG_KEY_INDEX))
             setKeyIndex(getInt(line.getParsedOptionValue(ARG_KEY_INDEX), getKeyIndex()));
-        if (line.hasOption(ARG_KEY_PWD))
-            setKeyPasswd(line.getOptionValue(ARG_KEY_PWD));
         if (line.hasOption(ARG_OUTPATH))
             setOutPath(line.getOptionValue(ARG_OUTPATH));
         if (line.hasOption(ARG_OPREFIX))
@@ -149,21 +151,22 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
             setLocation(line.getOptionValue(ARG_LOCATION));
         if (line.hasOption(ARG_CONTACT))
             setContact(line.getOptionValue(ARG_CONTACT));
-        setAppend(line.hasOption(ARG_APPEND));
+        // Append (incremental) is the safe default and matches the GUI; --overwrite opts into a
+        // non-incremental rewrite (only honoured by engines with the OVERWRITE_MODE capability). The
+        // legacy --append flag is kept for backward compatibility and is now a no-op (append is implied).
+        setAppend(!line.hasOption(ARG_OVERWRITE_LONG));
         if (line.hasOption(ARG_CERT_LEVEL))
             setCertLevel(line.getOptionValue(ARG_CERT_LEVEL));
         if (line.hasOption(ARG_HASH_ALGORITHM))
             setHashAlgorithm(line.getOptionValue(ARG_HASH_ALGORITHM));
+        if (line.hasOption(ARG_PADES_LEVEL))
+            setPadesLevel(line.getOptionValue(ARG_PADES_LEVEL));
 
         // encryption
         if (line.hasOption(ARG_ENCRYPTED))
             setPdfEncryption(PDFEncryption.PASSWORD);
         if (line.hasOption(ARG_ENCRYPTION))
             setPdfEncryption(line.getOptionValue(ARG_ENCRYPTION));
-        if (line.hasOption(ARG_PWD_OWNER))
-            setPdfOwnerPwd(line.getOptionValue(ARG_PWD_OWNER));
-        if (line.hasOption(ARG_PWD_USER))
-            setPdfUserPwd(line.getOptionValue(ARG_PWD_USER));
         if (line.hasOption(ARG_ENC_CERT))
             setPdfEncryptionCertFile(line.getOptionValue(ARG_ENC_CERT));
         if (line.hasOption(ARG_RIGHT_PRINT))
@@ -203,6 +206,8 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
         if (line.hasOption(ARG_BG_PATH))
             setBgImgPath(line.getOptionValue(ARG_BG_PATH));
         setAcro6Layers(!line.hasOption(ARG_DISABLE_ACRO6LAYERS));
+        if (line.hasOption(ARG_SIG_FIELD))
+            setSigFieldName(line.getOptionValue(ARG_SIG_FIELD));
 
         // TSA & OCSP
         if (line.hasOption(ARG_TSA_URL)) {
@@ -215,13 +220,9 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
             setTsaCertFileType(line.getOptionValue(ARG_TSA_CERT_FILE_TYPE));
         if (line.hasOption(ARG_TSA_CERT_FILE))
             setTsaCertFile(line.getOptionValue(ARG_TSA_CERT_FILE));
-        if (line.hasOption(ARG_TSA_CERT_PWD))
-            setTsaCertFilePwd(line.getOptionValue(ARG_TSA_CERT_PWD));
 
         if (line.hasOption(ARG_TSA_USER))
             setTsaUser(line.getOptionValue(ARG_TSA_USER));
-        if (line.hasOption(ARG_TSA_PWD))
-            setTsaPasswd(line.getOptionValue(ARG_TSA_PWD));
         if (line.hasOption(ARG_TSA_POLICY_LONG))
             setTsaPolicy(line.getOptionValue(ARG_TSA_POLICY_LONG));
         if (line.hasOption(ARG_TSA_HASH_ALG))
@@ -240,11 +241,130 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
         if (line.hasOption(ARG_PROXY_PORT_LONG))
             setProxyPort(getInt(line.getParsedOptionValue(ARG_PROXY_PORT_LONG), getProxyPort()));
 
+        if (line.hasOption(ARG_TIMESTAMP_ONLY)) {
+            applyTimestampOnly(line);
+        }
+
         setGui(line.hasOption(ARG_GUI));
         if (ArrayUtils.isNotEmpty(files)) {
             setInFile(files[0]);
         }
 
+        resolvePasswords(line);
+    }
+
+    /**
+     * Turns on the append-only document timestamp mode: rejects the options a DocTimeStamp can not honour, warns
+     * about those it ignores, and forces the TSA plumbing on (a TSA URL coming from a properties file does not set
+     * the timestamp flag the way {@code -ts} does).
+     *
+     * @param line the parsed command line
+     * @throws ParseException when an option incompatible with the operation is present
+     */
+    private void applyTimestampOnly(CommandLine line) throws ParseException {
+        final List<String> errors = new ArrayList<>();
+        if (line.hasOption(ARG_OVERWRITE_LONG)) {
+            errors.add(RES.get("console.timestampOnly.overwriteRejected"));
+        }
+        if (line.hasOption(ARG_SIG_FIELD)) {
+            errors.add(RES.get("console.timestampOnly.sigFieldRejected"));
+        }
+        if (line.hasOption(ARG_CERT_LEVEL)) {
+            errors.add(RES.get("console.timestampOnly.certLevelRejected"));
+        }
+        if (!errors.isEmpty()) {
+            throw new ParseException(String.join("\n", errors));
+        }
+
+        setTimestampOnly(true);
+        setTimestamp(true);
+
+        if (StringUtils.isEmpty(getTsaUrl())) {
+            throw new ParseException(RES.get("console.timestampOnly.tsaUrlMissing"));
+        }
+
+        warnIgnored(line, ARG_KS_TYPE_LONG, ARG_KS_FILE_LONG, ARG_KS_PWD_LONG, ARG_KEY_ALIAS_LONG, ARG_KEY_INDEX_LONG,
+                ARG_KEY_PWD_LONG);
+        warnIgnored(line, ARG_VISIBLE_LONG, ARG_PAGE_LONG, ARG_POS_LLX, ARG_POS_LLY, ARG_POS_URX, ARG_POS_URY,
+                ARG_BG_SCALE, ARG_RENDER_MODE, ARG_L2_TEXT_LONG, ARG_L2TEXT_FONT_SIZE_LONG, ARG_L4_TEXT_LONG,
+                ARG_IMG_PATH, ARG_BG_PATH);
+        warnIgnored(line, ARG_PADES_LEVEL_LONG, ARG_SIGNER_NAME_LONG, ARG_REASON_LONG, ARG_LOCATION_LONG,
+                ARG_CONTACT_LONG, ARG_OCSP_LONG, ARG_OCSP_SERVER_LONG, ARG_CRL_LONG);
+        if (line.hasOption(ARG_ENCRYPTION) || line.hasOption(ARG_ENCRYPTED)) {
+            LOGGER.warning(RES.get("console.timestampOnly.encryptionIgnored"));
+        }
+    }
+
+    /**
+     * Logs one warning per given option that is present on the command line but has no meaning for the
+     * document timestamp operation.
+     */
+    private void warnIgnored(CommandLine line, String... args) {
+        for (String arg : args) {
+            if (line.hasOption(arg)) {
+                LOGGER.warning(RES.get("console.timestampOnly.optionIgnored", arg));
+            }
+        }
+    }
+
+    /**
+     * Processes the six password options in a fixed canonical order, substituting values read from stdin
+     * (or the interactive console) wherever the user gave the sentinel {@code "-"} together with
+     * {@code --enable-stdin-passwords}. When the flag is missing, a {@code "-"} value is treated as a
+     * literal password (backwards compatible) and a warning is written to stderr unless {@code -q} is set.
+     * See {@code design-doc/3.0.0-stdin-passwords.md}.
+     */
+    private void resolvePasswords(CommandLine line) throws ParseException {
+        final boolean stdinEnabled = line.hasOption(ARG_ENABLE_STDIN_PWDS_LONG);
+        final boolean quiet = line.hasOption(ARG_QUIET);
+
+        final List<PwdSlot> slots = List.of(
+                new PwdSlot(ARG_KS_PWD, ARG_KS_PWD_LONG, this::setKsPasswd),
+                new PwdSlot(ARG_KEY_PWD, ARG_KEY_PWD_LONG, this::setKeyPasswd),
+                new PwdSlot(ARG_PWD_OWNER, ARG_PWD_OWNER_LONG, this::setPdfOwnerPwd),
+                new PwdSlot(ARG_PWD_USER, ARG_PWD_USER_LONG, this::setPdfUserPwd),
+                new PwdSlot(ARG_TSA_CERT_PWD, ARG_TSA_CERT_PWD_LONG, this::setTsaCertFilePwd),
+                new PwdSlot(ARG_TSA_PWD, ARG_TSA_PWD_LONG, this::setTsaPasswd));
+
+        int total = 0;
+        for (PwdSlot slot : slots) {
+            if (line.hasOption(slot.shortArg()) && STDIN_PWD_SENTINEL.equals(line.getOptionValue(slot.shortArg()))) {
+                total++;
+            }
+        }
+
+        int index = 0;
+        for (PwdSlot slot : slots) {
+            if (!line.hasOption(slot.shortArg())) {
+                continue;
+            }
+            final String raw = line.getOptionValue(slot.shortArg());
+            if (STDIN_PWD_SENTINEL.equals(raw)) {
+                if (stdinEnabled) {
+                    index++;
+                    try {
+                        if (passwordReader == null) {
+                            passwordReader = StdinPasswordReader.systemDefault(quiet);
+                        }
+                        char[] chars = passwordReader.readNext(slot.longArg(), index, total);
+                        slot.setter().accept(new String(chars));
+                    } catch (IOException ioe) {
+                        throw new ParseException(ioe.getMessage());
+                    }
+                } else {
+                    if (!quiet) {
+                        PrintStream w = warningOut != null ? warningOut : System.err;
+                        w.println(RES.get("console.stdinSentinelWarning", slot.longArg(), ARG_ENABLE_STDIN_PWDS_LONG));
+                    }
+                    slot.setter().accept(raw);
+                }
+            } else {
+                slot.setter().accept(raw);
+            }
+        }
+    }
+
+    private record PwdSlot(String shortArg, String longArg, Consumer<String> setter) {
     }
 
     /**
@@ -255,8 +375,8 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
      * @return
      */
     private int getInt(Object aVal, int aDefVal) {
-        if (aVal instanceof Number) {
-            return ((Number) aVal).intValue();
+        if (aVal instanceof Number n) {
+            return n.intValue();
         }
         return aDefVal;
     }
@@ -269,10 +389,26 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
      * @return
      */
     private float getFloat(Object aVal, float aDefVal) {
-        if (aVal instanceof Number) {
-            return ((Number) aVal).floatValue();
+        if (aVal instanceof Number n) {
+            return n.floatValue();
         }
         return aDefVal;
+    }
+
+    private Map<String, String> parseAdvancedOverrides(CommandLine line) throws ParseException {
+        Map<String, String> result = new LinkedHashMap<>();
+        String[] values = line.getOptionValues(ARG_OPTION);
+        if (values == null) {
+            return result;
+        }
+        for (String raw : values) {
+            int eq = raw.indexOf('=');
+            if (eq < 1) {
+                throw new ParseException("Invalid -" + ARG_OPTION + " value '" + raw + "', expected key=value");
+            }
+            result.put(raw.substring(0, eq), raw.substring(eq + 1));
+        }
+        return result;
     }
 
     static {
@@ -285,14 +421,28 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
                 .create(ARG_LOADPROPS));
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_LOADPROPS_FILE_LONG).withDescription(RES.get("hlp.loadPropertiesFile"))
                 .hasArg().withArgName("file").create(ARG_LOADPROPS_FILE));
+        OPTS.addOption(OptionBuilder.withLongOpt(ARG_OPTION_LONG).withDescription(RES.get("hlp.option"))
+                .hasArg().withArgName("key=value").create(ARG_OPTION));
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_LIST_KS_TYPES_LONG).withDescription(RES.get("hlp.listKsTypes"))
                 .create(ARG_LIST_KS_TYPES));
+        OPTS.addOption(OptionBuilder.withLongOpt(ARG_LIST_KS_PROVIDERS_LONG).withDescription(RES.get("hlp.listKsProviders"))
+                .create(ARG_LIST_KS_PROVIDERS));
         OPTS.addOption(
                 OptionBuilder.withLongOpt(ARG_LIST_KEYS_LONG).withDescription(RES.get("hlp.listKeys")).create(ARG_LIST_KEYS));
+        OPTS.addOption(OptionBuilder.withLongOpt(ARG_LIST_ENGINES_LONG).withDescription(RES.get("hlp.listEngines"))
+                .create(ARG_LIST_ENGINES));
+        OPTS.addOption(OptionBuilder.withLongOpt(ARG_LIST_SIG_FIELDS_LONG).withDescription(RES.get("hlp.listSigFields"))
+                .create(ARG_LIST_SIG_FIELDS));
+
+        // signing engine selection
+        OPTS.addOption(OptionBuilder.withLongOpt(ARG_ENGINE_LONG).withDescription(RES.get("hlp.engine")).hasArg()
+                .withArgName("engine").create(ARG_ENGINE));
 
         // keystore and key configuration options
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_KS_TYPE_LONG).withDescription(RES.get("hlp.ksType")).hasArg()
                 .withArgName("type").create(ARG_KS_TYPE));
+        OPTS.addOption(OptionBuilder.withLongOpt(ARG_KS_PROVIDER_LONG).withDescription(RES.get("hlp.ksProvider")).hasArg()
+                .withArgName("profile").create(ARG_KS_PROVIDER));
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_KS_FILE_LONG).withDescription(RES.get("hlp.ksFile")).hasArg()
                 .withArgName("file").create(ARG_KS_FILE));
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_KS_PWD_LONG).withDescription(RES.get("hlp.ksPwd")).hasArg()
@@ -303,12 +453,15 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
                 .withType(Number.class).withArgName("index").create(ARG_KEY_INDEX));
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_KEY_PWD_LONG).withDescription(RES.get("hlp.keyPwd")).hasArg()
                 .withArgName("password").create(ARG_KEY_PWD));
+        OPTS.addOption(OptionBuilder.withLongOpt(ARG_ENABLE_STDIN_PWDS_LONG)
+                .withDescription(RES.get("hlp.enableStdinPasswords")).create());
 
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_OUTPATH_LONG).withDescription(RES.get("hlp.outPath")).hasArg()
                 .withArgName("path").create(ARG_OUTPATH));
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_OPREFIX_LONG).withDescription(RES.get("hlp.outPrefix")).hasArg()
                 .withArgName("prefix").create(ARG_OPREFIX));
-        OPTS.addOption(OptionBuilder.withLongOpt(ARG_OSUFFIX_LONG).withDescription(RES.get("hlp.outSuffix")).hasArg()
+        OPTS.addOption(OptionBuilder.withLongOpt(ARG_OSUFFIX_LONG)
+                .withDescription(RES.get("hlp.outSuffix", AppConfig.defaultOutSuffix())).hasArg()
                 .withArgName("suffix").create(ARG_OSUFFIX));
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_SIGNER_NAME_LONG).withDescription(RES.get("hlp.signerName")).hasArg()
                 .withArgName("signer").create(ARG_SIGNER_NAME));
@@ -319,12 +472,15 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_CONTACT_LONG).withDescription(RES.get("hlp.contact")).hasArg()
                 .withArgName("contact").create(ARG_CONTACT));
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_APPEND_LONG).withDescription(RES.get("hlp.append")).create(ARG_APPEND));
+        OPTS.addOption(OptionBuilder.withLongOpt(ARG_OVERWRITE_LONG).withDescription(RES.get("hlp.overwrite")).create());
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_CERT_LEVEL_LONG)
                 .withDescription(RES.get("hlp.certLevel", getEnumValues(CertificationLevel.values()))).hasArg()
                 .withArgName("level").create(ARG_CERT_LEVEL));
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_HASH_ALGORITHM_LONG)
                 .withDescription(RES.get("hlp.hashAlgorithm", getEnumValues(HashAlgorithm.values()))).hasArg()
                 .withArgName("algorithm").create(ARG_HASH_ALGORITHM));
+        OPTS.addOption(OptionBuilder.withLongOpt(ARG_PADES_LEVEL_LONG).withDescription(RES.get("hlp.padesLevel")).hasArg()
+                .withArgName("level").create(ARG_PADES_LEVEL));
 
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_QUIET_LONG).withDescription(RES.get("hlp.quiet")).create(ARG_QUIET));
 
@@ -385,6 +541,8 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
                         .create(ARG_L2TEXT_FONT_SIZE));
         OPTS.addOption(OptionBuilder.withDescription(RES.get("hlp.l4Text")).withLongOpt(ARG_L4_TEXT_LONG).hasArg()
                 .withArgName("text").create());
+        OPTS.addOption(OptionBuilder.withLongOpt(ARG_SIG_FIELD_LONG).withDescription(RES.get("hlp.sigField")).hasArg()
+                .withArgName("field").create(ARG_SIG_FIELD));
 
         // TSA & OCSP
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_TSA_URL_LONG).withDescription(RES.get("hlp.tsaUrl")).hasArg()
@@ -412,7 +570,7 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_TSA_POLICY_LONG).withDescription(RES.get("hlp.tsaPolicy")).hasArg()
                 .withArgName("policyOID").create());
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_TSA_HASH_ALG_LONG)
-                .withDescription(RES.get("hlp.tsaHashAlg", Constants.DEFVAL_TSA_HASH_ALG)).hasArg().withArgName("algorithm")
+                .withDescription(RES.get("hlp.tsaHashAlg", AppConfig.defaultTsaHashAlg())).hasArg().withArgName("algorithm")
                 .create(ARG_TSA_HASH_ALG));
 
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_OCSP_LONG).withDescription(RES.get("hlp.ocsp")).create());
@@ -420,6 +578,9 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
                 .withArgName("responderUrl").create());
 
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_CRL_LONG).withDescription(RES.get("hlp.crl")).create());
+
+        OPTS.addOption(OptionBuilder.withLongOpt(ARG_TIMESTAMP_ONLY_LONG).withDescription(RES.get("hlp.timestampOnly"))
+                .create(ARG_TIMESTAMP_ONLY));
 
         OPTS.addOption(OptionBuilder
                 .withDescription(RES.get("hlp.proxyType", DEFVAL_PROXY_TYPE.name(), getEnumValues(Proxy.Type.values())))
@@ -432,15 +593,6 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
                 .withLongOpt(ARG_PROXY_PORT_LONG).hasArg().withType(Number.class).withArgName("port").create());
 
         OPTS.addOption(OptionBuilder.withLongOpt(ARG_GUI).withDescription(RES.get("hlp.gui")).create());
-    }
-
-    /**
-     * @return the outPrefix
-     */
-    public String getOutPrefix() {
-        if (outPrefix == null)
-            outPrefix = "";
-        return outPrefix;
     }
 
     /**
@@ -461,29 +613,6 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
             tmpResult.append(tmpEnu.name());
         }
         return tmpResult.toString();
-    }
-
-    /**
-     * @param outPrefix the outPrefix to set
-     */
-    public void setOutPrefix(String outPrefix) {
-        this.outPrefix = outPrefix;
-    }
-
-    /**
-     * @return the outSuffix
-     */
-    public String getOutSuffix() {
-        if (outSuffix == null)
-            outSuffix = "";
-        return outSuffix;
-    }
-
-    /**
-     * @param outSuffix the outSuffix to set
-     */
-    public void setOutSuffix(String outSuffix) {
-        this.outSuffix = outSuffix;
     }
 
     /**
@@ -542,6 +671,14 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
         this.listKeyStores = listKeyStores;
     }
 
+    public boolean isListKeyStoreProviders() {
+        return listKeyStoreProviders;
+    }
+
+    public void setListKeyStoreProviders(boolean listKeyStoreProviders) {
+        this.listKeyStoreProviders = listKeyStoreProviders;
+    }
+
     /**
      * @return the listKeys
      */
@@ -557,29 +694,33 @@ public class SignerOptionsFromCmdLine extends BasicSignerOptions {
     }
 
     /**
-     * Returns output path including tailing slash character
-     *
-     * @return the outPath
+     * @return the listEngines
      */
-    public String getOutPath() {
-        String tmpResult;
-        if (StringUtils.isEmpty(outPath)) {
-            tmpResult = "./";
-        } else {
-            tmpResult = outPath.replaceAll("\\\\", "/");
-            if (!tmpResult.endsWith("/")) {
-                tmpResult = tmpResult + "/";
-            }
-        }
-        return tmpResult;
+    public boolean isListEngines() {
+        return listEngines;
     }
 
     /**
-     * @param outPath the outPath to set
+     * @param listEngines the listEngines to set
      */
-    public void setOutPath(String outPath) {
-        this.outPath = outPath;
+    public void setListEngines(boolean listEngines) {
+        this.listEngines = listEngines;
     }
+
+    /**
+     * @return the listSigFields
+     */
+    public boolean isListSigFields() {
+        return listSigFields;
+    }
+
+    /**
+     * @param listSigFields the listSigFields to set
+     */
+    public void setListSigFields(boolean listSigFields) {
+        this.listSigFields = listSigFields;
+    }
+
 
     public boolean isGui() {
         return gui;
